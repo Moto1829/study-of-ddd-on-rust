@@ -1,0 +1,12 @@
+[book]
+title = "RustにおけるDDD(ドメイン駆動開発)の実践"
+language = "ja"
+src = "contents"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+git-repository-url = "https://github.com/suzukishimei/study-of-ddd-on-rust"
+site-url = "/study-of-ddd-on-rust/"

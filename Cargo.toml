@@ -1,0 +1,10 @@
+[package]
+name = "study-of-ddd-on-rust"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "study_of_ddd_on_rust"
+path = "src/lib.rs"
+
+[dependencies]
