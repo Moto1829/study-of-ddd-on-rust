@@ -29,4 +29,5 @@
 - [ドメインイベントによる副作用の分離](./07-advanced/06-domain-events.md)
 - [CQRSへ進む判断基準](./07-advanced/07-cqrs-decision-guide.md)
 - [Cargo workspaceに分割するタイミング](./07-advanced/08-cargo-workspace-timing.md)
+- [Bounded Contextをどう見つけるか](./07-advanced/09-bounded-context.md)
 - [まとめ](./08-conclusion.md)
