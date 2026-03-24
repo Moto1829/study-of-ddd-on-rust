@@ -17,6 +17,7 @@ impl From<TaskError> for TaskApplicationError {
 pub enum TaskStatusDto {
     Open,
     Completed,
+    Archived,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +112,25 @@ where
 
         Ok(output)
     }
+
+    pub fn archive_task(
+        &mut self,
+        task_id: impl Into<String>,
+    ) -> Result<TaskOutput, TaskApplicationError> {
+        let task_id = TaskId::new(task_id)?;
+        let mut task = self
+            .repository
+            .find_by_id(&task_id)
+            .ok_or_else(|| TaskApplicationError::TaskNotFound {
+                task_id: task_id.value().to_owned(),
+            })?;
+
+        task.archive()?;
+        let output = TaskOutput::from(&task);
+        self.repository.save(task);
+
+        Ok(output)
+    }
 }
 
 impl From<&Task> for TaskOutput {
@@ -128,6 +148,7 @@ impl From<TaskStatus> for TaskStatusDto {
         match value {
             TaskStatus::Open => Self::Open,
             TaskStatus::Completed => Self::Completed,
+            TaskStatus::Archived => Self::Archived,
         }
     }
 }

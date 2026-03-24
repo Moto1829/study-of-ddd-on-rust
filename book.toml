@@ -8,5 +8,5 @@ build-dir = "book"
 
 [output.html]
 default-theme = "light"
-git-repository-url = "https://github.com/suzukishimei/study-of-ddd-on-rust"
+git-repository-url = "https://github.com/Moto1829/study-of-ddd-on-rust"
 site-url = "/study-of-ddd-on-rust/"
