@@ -12,7 +12,7 @@
 
 ## サンプルの最小例
 
-このサンプルでは、タスク完了通知のためのポートとして `TaskCompletionNotifier` を追加しています。
+このタスク管理アプリでは、タスク完了通知のためのポートとして `TaskCompletionNotifier` を追加しています。
 
 ```rust
 pub trait TaskCompletionNotifier {

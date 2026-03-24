@@ -22,7 +22,7 @@ pub struct TaskTitle(String);
 
 ドメインルール違反を panic で扱うのではなく、`Result<T, E>` で返すことで、失敗が設計の一部として見えるようになります。
 
-このサンプルでは、`TaskTitle::new` が `Result<TaskTitle, TaskError>` を返します。これにより、呼び出し側は「空文字が来るかもしれない」という可能性を明示的に扱えます。
+この本のタスク管理アプリでは、`TaskTitle::new` が `Result<TaskTitle, TaskError>` を返します。これにより、呼び出し側は「空文字が来るかもしれない」という可能性を明示的に扱えます。
 
 ## 所有権と責務の境界
 

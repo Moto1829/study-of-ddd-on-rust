@@ -17,7 +17,7 @@
 
 ## サンプル実装
 
-このサンプルでは、`OpenTaskLimitPolicy` をDomain Serviceの具体例として追加しています。
+この本のタスク管理アプリでは、`OpenTaskLimitPolicy` をDomain Serviceの具体例として追加しています。
 
 ```rust
 pub struct OpenTaskLimitPolicy {
