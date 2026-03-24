@@ -20,7 +20,7 @@
 
 ## どう表現するか
 
-このリポジトリでは、トランザクション境界の概念例として `TransactionRunner` を追加しています。
+このサンプルでは、トランザクション境界の概念例として `TransactionRunner` を追加しています。
 
 ```rust
 pub trait TransactionRunner<E> {

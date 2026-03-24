@@ -33,13 +33,13 @@
 
 ## モデルを読み解く順番
 
-このリポジトリのコードを読むときは、次の順番が理解しやすいです。
+このサンプルを読み解くときは、次の順番が理解しやすいです。
 
-1. `TaskId` と `TaskTitle` を見る
-2. `TaskStatus` と `Task` を見る
-3. `TaskRepository` を見る
-4. `TaskApplicationService` を見る
-5. `TaskSummaryReader` と `TaskRow` を見る
+1. 入力値を守る `TaskId` と `TaskTitle` を見る
+2. 状態遷移を持つ `TaskStatus` と `Task` を見る
+3. 保存境界である `TaskRepository` を見る
+4. ユースケースを組み立てる `TaskApplicationService` を見る
+5. 読み取りモデルと永続化モデルである `TaskSummaryReader` と `TaskRow` を見る
 
 この順番で読むと、下位のドメイン制約が上位のユースケースへどう持ち上がり、さらに一覧取得や永続化モデル変換へどうつながるかがわかります。
 
