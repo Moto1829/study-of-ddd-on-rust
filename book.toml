@@ -10,3 +10,4 @@ build-dir = "book"
 default-theme = "light"
 git-repository-url = "https://github.com/Moto1829/study-of-ddd-on-rust"
 site-url = "/study-of-ddd-on-rust/"
+additional-js = ["assets/fzf.umd.js", "assets/elasticlunr.js"]
