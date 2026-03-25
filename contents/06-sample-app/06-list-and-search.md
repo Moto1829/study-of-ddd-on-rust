@@ -2,11 +2,11 @@
 
 ここでは、前章までの書き込み中心のモデルに加えて、一覧取得と検索をどう扱うかをタスク管理アプリのコードへ結びつけます。
 
-この章は、`一覧取得と検索をどう設計するか` で整理した原則を、`TaskSummaryReader`、`FindTasksQuery`、`InMemoryTaskRepository` にどう対応させるかを見るための章です。そのため、考え方そのものの説明は最小限に留め、実装への写像に集中します。
+この章は、`一覧取得と検索をどう設計するか` で整理した原則を、題材アプリケーションの具体的な要素へ対応付けるための章です。ここでいう `TaskSummaryReader` は一覧取得専用の読み取り境界、`FindTasksQuery` は検索条件をまとめた値、`InMemoryTaskRepository` はインメモリ実装の保存先です。そのため、考え方そのものの説明は最小限に留め、実装への写像に集中します。
 
 ## 書き込みモデルと読み取りモデルを分ける
 
-このタスク管理アプリでは、書き込み側に `TaskRepository`、読み取り側に `TaskSummaryReader` を置いています。これは大げさな分離ではなく、一覧要求と更新要求の関心事を分けるための最低限の整理です。
+このタスク管理アプリでは、書き込み側に `TaskRepository`、読み取り側に `TaskSummaryReader` を置いています。`TaskSummaryReader` は一覧表示向けの要約データだけを返す読み取り専用の窓口です。これは大げさな分離ではなく、一覧要求と更新要求の関心事を分けるための最低限の整理です。
 
 一覧表示で必要なのは、たとえば次のような要約情報です。
 
@@ -18,7 +18,7 @@
 
 ## FindTasksQuery の役割
 
-検索条件は `FindTasksQuery` としてまとめています。
+検索条件は `FindTasksQuery` としてまとめています。これは「一覧をどう絞り込み、どうページングするか」を1つに束ねた入力モデルです。
 
 ```rust
 pub struct FindTasksQuery {
@@ -32,7 +32,7 @@ pub struct FindTasksQuery {
 
 ## インメモリ実装で何を確認しているか
 
-`InMemoryTaskRepository` は、保存だけでなく `TaskSummaryReader` も実装しています。ここでは次のことを確認できます。
+`InMemoryTaskRepository` は、保存だけでなく `TaskSummaryReader` も実装しています。つまり、メモリ上へ保持したタスクから、一覧用の要約データも取り出せるようにしています。ここでは次のことを確認できます。
 
 - Open / Completed / Archived の状態で絞り込める
 - ページングをかけられる

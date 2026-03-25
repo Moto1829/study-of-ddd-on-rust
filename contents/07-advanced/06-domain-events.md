@@ -17,7 +17,7 @@
 
 ## タスク管理アプリの最小例
 
-このタスク管理アプリでは、`TaskEvent` を追加しています。
+このタスク管理アプリでは、`TaskEvent` というイベント型を追加しています。これは「何が起きたか」を表す列挙型で、たとえば作成や完了の事実を表現するために使います。
 
 ```rust
 pub enum TaskEvent {
@@ -31,7 +31,7 @@ pub enum TaskEvent {
 
 ## 発行先はInfrastructureへ閉じる
 
-イベント発行の抽象として、`DomainEventPublisher` を用意しています。
+イベント発行の抽象として、`DomainEventPublisher` を用意しています。これは「イベントをどこかへ送る役割」だけを切り出した境界です。
 
 ```rust
 pub trait DomainEventPublisher {

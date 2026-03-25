@@ -17,7 +17,7 @@
 
 ## サンプル実装
 
-この本のタスク管理アプリでは、`OpenTaskLimitPolicy` をDomain Serviceの具体例として追加しています。
+この本のタスク管理アプリでは、`OpenTaskLimitPolicy` という名前のポリシー型をDomain Serviceの具体例として置いています。名前は一例ですが、「未完了タスク数の上限を判定する業務ルール」を表しています。
 
 ```rust
 pub struct OpenTaskLimitPolicy {

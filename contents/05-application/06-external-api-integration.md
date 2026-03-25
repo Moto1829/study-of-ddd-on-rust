@@ -12,7 +12,7 @@
 
 ## サンプルの最小例
 
-このタスク管理アプリでは、タスク完了通知のためのポートとして `TaskCompletionNotifier` を追加しています。
+題材アプリケーションに外部連携を足すとしたら、タスク完了通知のためのポートとして `TaskCompletionNotifier` のような境界を置くのが自然です。
 
 ```rust
 pub trait TaskCompletionNotifier {
@@ -20,9 +20,9 @@ pub trait TaskCompletionNotifier {
 }
 ```
 
-これに対して、Infrastructure側には `LoggingTaskCompletionNotifier` という最小実装を置いています。実際のメール送信やWebhook呼び出しではありませんが、「外部連携の詳細はInfrastructureに置く」という形は示せます。
+これに対して、Infrastructure側には `LoggingTaskCompletionNotifier` のような最小実装を置けます。実際のメール送信やWebhook呼び出しではありませんが、「外部連携の詳細はInfrastructureに置く」という形は示せます。
 
-ここでは、通知を直接Application Serviceから呼ぶ最小構成を理解できれば十分です。後からドメインイベント経由へ発展させる余地がある、という順番で読むと混乱しにくくなります。
+ここでは、通知をApplication Serviceから呼ぶ最小構成を概念例として理解できれば十分です。後からドメインイベント経由へ発展させる余地がある、という順番で読むと混乱しにくくなります。
 
 ## 重要なのは依存方向
 

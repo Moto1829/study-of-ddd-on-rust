@@ -23,7 +23,7 @@
 
 1. 今のタスク管理ドメインに期限や担当者を追加する
 2. SQLite などを使ったRepository実装を加える
-3. Web APIやCLIから `TaskApplicationService` を呼び出す
+3. Web APIやCLIから Application Service を呼び出す
 4. 読み取りモデルやDomain Eventへ発展させる
 
 学習用としては、まず小さなドメインで責務分担が保てているかを確認し、そのあとで拡張していくのが堅実です。
