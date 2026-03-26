@@ -1,4 +1,4 @@
-# Infrastructure層の実装方針
+# 第5章-3 Infrastructure層の実装方針
 
 Infrastructure層は、ドメインの外側にある技術的関心事を受け持つ層です。DB、外部API、メッセージング、時刻取得などがここに入ります。
 

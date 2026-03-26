@@ -1,4 +1,4 @@
-# Repositoryをトレイトで定義する
+# 第5章-2 Repositoryをトレイトで定義する
 
 Repositoryは、Aggregateの保存と取得を抽象化するための境界です。Rustでは、これをトレイトで表現すると依存方向を明確にしやすくなります。
 

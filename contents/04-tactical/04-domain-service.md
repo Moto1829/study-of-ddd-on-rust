@@ -1,4 +1,4 @@
-# Domain Serviceの使いどころ
+# 第4章-4 Domain Serviceの使いどころ
 
 Domain Serviceは便利な退避先ではありません。重要な業務ルールだが、特定のEntityやValue Objectの責務として置きにくい場合にだけ導入するものです。
 

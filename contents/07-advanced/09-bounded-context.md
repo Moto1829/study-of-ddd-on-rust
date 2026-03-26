@@ -1,4 +1,4 @@
-# Bounded Contextをどう見つけるか
+# 第7章-9 Bounded Contextをどう見つけるか
 
 DDDを学び始めた段階では、Entity や Value Object までは理解しやすくても、Bounded Context は急に抽象度が上がったように感じやすい概念です。しかし実務では、モデルを壊す原因の多くが「同じ言葉を別の意味で使い始めること」にあります。Bounded Context は、その混線を防ぐための境界です。
 

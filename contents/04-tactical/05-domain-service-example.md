@@ -1,4 +1,4 @@
-# Domain Serviceが必要になる具体例
+# 第4章-5 Domain Serviceが必要になる具体例
 
 ここまでは、`Task` や `TaskTitle` の責務だけでかなり多くのルールを表現できました。しかし実務では、1つのEntityだけでは判断できないルールも普通に出てきます。そういう場面で、はじめてDomain Serviceが自然な選択肢になります。
 

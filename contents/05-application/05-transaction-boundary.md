@@ -1,4 +1,4 @@
-# トランザクション境界とApplication Service
+# 第5章-5 トランザクション境界とApplication Service
 
 実務でApplication Serviceを考えるとき、避けて通れないのがトランザクションです。ユースケースの途中でDB更新が中途半端に終わると、ドメインルール以前にシステム整合性が壊れます。
 
