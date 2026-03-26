@@ -8,11 +8,11 @@
 
 外部API連携の実装はInfrastructure層に閉じるのが基本です。理由は単純で、HTTPクライアントやSDKの都合はドメインルールそのものではないからです。
 
-ドメイン層やApplication Serviceは「何をしたいか」を表現し、実際にどのAPIをどう叩くかはInfrastructureで引き受ける方が責務が明確になります。
+ドメイン層やApplication Serviceは「何をしたいか」を表現し、実際にどのAPIをどう呼び出すかはInfrastructureで引き受ける方が責務が明確になります。
 
 ## サンプルの最小例
 
-題材アプリケーションに外部連携を足すとしたら、タスク完了通知のためのポートとして `TaskCompletionNotifier` のような境界を置くのが自然です。
+この本のタスク管理アプリに外部連携を足すとしたら、タスク完了通知のためのポートとして `TaskCompletionNotifier` のような境界を置くのが自然です。
 
 ```rust
 pub trait TaskCompletionNotifier {
