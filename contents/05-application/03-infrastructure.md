@@ -36,6 +36,75 @@ DB実装に進むときも、方針は変わりません。
 
 ここを崩してORM中心でモデルを作ると、ドメインルールよりテーブル都合が前に出やすくなります。
 
+## コラム: コンポジションルートで依存を組み立てる
+
+ここまでで、Application Service は `TaskRepository` トレイトだけに依存し、具体的な実装は Infrastructure 層に置く、という形になりました。では「実際にどの実装を使うか」は、どこで決めればよいのでしょうか。
+
+その答えになるのが **コンポジションルート(Composition Root)** です。
+
+### DDDの用語ではない
+
+最初に注意しておくと、コンポジションルートはDDDの用語ではありません。Eric Evans の『ドメイン駆動設計』にも、Vaughn Vernon の『実践ドメイン駆動設計』にも、パターンとしては登場しません。Mark Seemann が『Dependency Injection in .NET』で広めた、DI(依存性注入)の文脈の言葉です。
+
+それでもここで取り上げるのは、DDDをレイヤードアーキテクチャやヘキサゴナルアーキテクチャと組み合わせて実装すると、ほぼ必ずこの場所が必要になるからです。
+
+### 意味
+
+コンポジションルートとは、**アプリケーションのエントリポイント付近にある、オブジェクトの依存関係をまとめて組み立てる唯一の場所** のことです。
+
+- 具象型を選び、つなぎ合わせる処理はここに集める
+- ドメイン層やアプリケーション層は、具象型を一切知らない
+- 依存方向(infrastructure → application → domain)を守ったまま、全層を知ってよい唯一の場所になる
+
+### タスク管理アプリでの例
+
+本書のサンプルコードは `lib.rs` のみのライブラリ構成で、組み立てはテストの中で行っています。実行可能なアプリケーションにするなら、`main.rs` がコンポジションルートになります。
+
+```rust
+use study_of_ddd_on_rust::application::TaskApplicationService;
+use study_of_ddd_on_rust::infrastructure::InMemoryTaskRepository;
+
+fn main() {
+    // ここで具象型を選ぶ。将来DB実装に差し替えるときも、変更はこの行だけで済む
+    let repository = InMemoryTaskRepository::new();
+
+    // Application Service にはトレイトを満たす値として注入する
+    let mut service = TaskApplicationService::new(repository);
+
+    let task = service.create_task("task-1", "Write chapter draft").unwrap();
+    println!("{:?}", task);
+}
+```
+
+`TaskApplicationService<R: TaskRepository>` はジェネリクスで書かれているため、`R` に何を入れるかは呼び出し側が決めます。その「呼び出し側の一番外側」がコンポジションルートです。たとえば PostgreSQL 実装を追加した場合でも、`TaskApplicationService` やドメイン層のコードには手を入れず、`main.rs` で生成する Repository を差し替えるだけで済みます。
+
+テストコードで `InMemoryTaskRepository` を生成して `TaskApplicationService::new` に渡しているのも、テスト用の小さなコンポジションルートだと見ることができます。
+
+### やってはいけないこと
+
+コンポジションルートの考え方を崩す典型例は、Application Service の内部で具象型を直接生成してしまうことです。
+
+```rust
+// 悪い例: Application Service が Infrastructure の具象型を知ってしまう
+impl TaskApplicationService {
+    pub fn new() -> Self {
+        Self {
+            repository: InMemoryTaskRepository::new(),
+        }
+    }
+}
+```
+
+こうすると、application → infrastructure という逆向きの依存が生まれ、テスト時に実装を差し替えることもできなくなります。具象型の生成は外側に追い出し、内側はトレイトだけを受け取る、という線引きを守ることが大切です。
+
+### Rustでの実践上のポイント
+
+- RustにはSpringやASP.NET Coreのような標準的なDIコンテナはないため、`main.rs` で手書きで組み立てる **Pure DI** が基本になる
+- 依存が増えてきたら、`main.rs` から `bootstrap.rs` や `app_state.rs` のようなモジュールへ組み立て処理を切り出すと読みやすい
+- Webフレームワーク(axumなど)を使う場合は、`main` で組み立てた Application Service を `State` として各ハンドラへ渡す形が典型的
+
+ディレクトリ構成全体の中でこの組み立て処理をどこに置くかは、発展章の `実務で使うディレクトリ構造の考え方` もあわせて参照してください。
+
 ## 学習用コードとしての価値
 
 インメモリ実装をサンプルコードとして手元に持っておくと、章で説明した抽象化が本当に必要かをすぐ検証できます。学習コンテンツにおいては、動く最小構成を維持すること自体が重要な品質です。
