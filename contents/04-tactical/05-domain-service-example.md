@@ -63,3 +63,5 @@ impl OpenTaskLimitPolicy {
 - 単に複数Repositoryを呼ぶだけの処理もDomain Serviceだと考えがち
 
 大事なのは、そこに業務判断があるかどうかです。Entityへ置けないが、確かにドメインルールである。そういうときにDomain Serviceは意味を持ちます。
+
+次章では、Entityの生成ルールをどこに置くかを扱う Factory パターンを見ます。

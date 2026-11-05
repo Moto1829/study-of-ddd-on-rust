@@ -10,6 +10,12 @@
 - Application Serviceでユースケースを調停する
 - Repositoryで永続化境界を抽象化する
 - インメモリ実装とテストで設計を検証する
+- ユビキタス言語とサブドメインの分類で、モデルと設計の労力の置き場所を決める
+- Factory、Specification、typestate で生成・条件・状態遷移のルールを型に寄せる
+- エラー、非同期、認可、テストを層の責務に沿って設計する
+- Context Map と腐敗防止層で、他のコンテキストや外部システムからモデルを守る
+- 結果整合性、楽観ロック、Outbox、Saga で複数の Aggregate やシステムにまたがる整合性を扱う
+- Event Sourcing やアーキテクチャの選択肢、既存システムへの段階的な導入を知る
 
 ## 重要だった観点
 
@@ -25,5 +31,7 @@
 2. SQLite などを使ったRepository実装を加える
 3. Web APIやCLIから Application Service を呼び出す
 4. 読み取りモデルやDomain Eventへ発展させる
+5. 期限や担当者を追加したドメインで、Specification や typestate を試す
+6. 手元の既存プロジェクトで、Value Object を1つ導入してみる
 
 学習用としては、まず小さなドメインで責務分担が保てているかを確認し、そのあとで拡張していくのが堅実です。
