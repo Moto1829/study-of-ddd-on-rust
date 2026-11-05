@@ -1,6 +1,7 @@
 pub mod application;
 pub mod domain;
 pub mod infrastructure;
+pub mod presentation;
 
 #[cfg(test)]
 mod tests {
@@ -16,6 +17,7 @@ mod tests {
         InMemoryDomainEventPublisher, InMemoryTaskRepository, LoggingTaskCompletionNotifier,
         TaskRow,
     };
+    use crate::presentation::{CliApp, Command, CommandParseError, error_message, parse_command};
 
     #[test]
     fn task_title_rejects_empty_input() {
@@ -234,5 +236,61 @@ mod tests {
         publisher.publish(&event).unwrap();
 
         assert_eq!(publisher.events(), vec![event]);
+    }
+
+    #[test]
+    fn cli_parses_create_command_with_multi_word_title() {
+        let command = parse_command("create task-1 Write chapter draft").unwrap();
+
+        assert_eq!(
+            command,
+            Command::Create {
+                id: "task-1".to_owned(),
+                title: "Write chapter draft".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn cli_rejects_command_without_required_argument() {
+        let result = parse_command("complete");
+
+        assert_eq!(
+            result,
+            Err(CommandParseError::MissingArgument {
+                usage: "complete <id>",
+            })
+        );
+    }
+
+    #[test]
+    fn cli_app_shares_state_between_service_and_reader() {
+        let repository = InMemoryTaskRepository::new();
+        let service = TaskApplicationService::new(repository.clone());
+        let mut app = CliApp::new(service, repository, 20);
+
+        app.execute(Command::Create {
+            id: "task-1".to_owned(),
+            title: "Write chapter draft".to_owned(),
+        })
+        .unwrap();
+        let listed = app.execute(Command::List { status: None }).unwrap();
+
+        assert_eq!(listed, "[task-1] Write chapter draft (open)");
+    }
+
+    #[test]
+    fn cli_converts_application_error_to_user_message() {
+        let repository = InMemoryTaskRepository::new();
+        let service = TaskApplicationService::new(repository.clone());
+        let mut app = CliApp::new(service, repository, 20);
+
+        let error = app
+            .execute(Command::Complete {
+                id: "missing".to_owned(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error_message(&error), "タスク missing が見つかりません");
     }
 }

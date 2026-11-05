@@ -31,6 +31,7 @@
 - [第6章-4 永続化とテストを実装する](./06-sample-app/04-persistence-and-testing.md)
 - [第6章-5 削除ではなく状態遷移として表現する](./06-sample-app/05-delete-and-archive.md)
 - [第6章-6 一覧取得と検索をタスク管理アプリへ落とし込む](./06-sample-app/06-list-and-search.md)
+- [第6章-7 アプリケーションを起動する: main関数の設計](./06-sample-app/07-running-the-app.md)
 - [第7章-1 RustでDDDを実践する際の悩みどころ](./07-advanced/01-practical-tradeoffs.md)
 - [第7章-2 DDD学習者がよくつまずく点](./07-advanced/02-common-stumbling-points.md)
 - [第7章-3 CQRSやイベント駆動へ発展させるには](./07-advanced/03-cqrs-and-events.md)

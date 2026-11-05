@@ -19,6 +19,9 @@ cargo test
 cargo test <テスト関数名>
 # 例: cargo test task_title_rejects_empty_input
 
+# 対話CLIを起動
+cargo run
+
 # mdBookのローカルプレビュー（要 mdbook インストール）
 mdbook serve
 
@@ -43,17 +46,20 @@ src/
 │   ├── task_completion_notifier.rs  # 外部通知トレイト
 │   ├── domain_event_publisher.rs    # イベント発行トレイト
 │   └── transaction_runner.rs        # トランザクション境界トレイト
-└── infrastructure/   # インフラ層
-    ├── in_memory_task_repository.rs  # InMemoryTaskRepository (TaskRepository実装)
-    ├── persistence/task_row.rs       # TaskRow (DBレコード相当の永続化モデル)
-    └── external/
-        ├── logging_task_completion_notifier.rs  # ログ出力通知実装
-        └── in_memory_domain_event_publisher.rs  # インメモリイベント発行実装
+├── infrastructure/   # インフラ層
+│   ├── in_memory_task_repository.rs  # InMemoryTaskRepository (TaskRepository実装)
+│   ├── persistence/task_row.rs       # TaskRow (DBレコード相当の永続化モデル)
+│   └── external/
+│       ├── logging_task_completion_notifier.rs  # ログ出力通知実装
+│       └── in_memory_domain_event_publisher.rs  # インメモリイベント発行実装
+├── presentation/     # プレゼンテーション層
+│   └── cli.rs            # CLI入力の解析・ユースケース呼び出し・エラーの表示変換 (CliApp)
+└── main.rs           # エントリポイント兼コンポジションルート (cargo run で対話CLIを起動)
 ```
 
 ### 設計の核心
 
-- **依存方向**: infrastructure → application → domain（domainは他層に依存しない）
+- **依存方向**: presentation / infrastructure → application → domain（domainは他層に依存しない）。具象型の組み立ては `main.rs` だけで行う
 - **Repository トレイト**: `domain::TaskRepository` はドメイン層で定義し、インフラ層で実装。`TaskApplicationService<R: TaskRepository>` のようにジェネリクスで注入する
 - **永続化モデルの分離**: `Task`（ドメインオブジェクト）と `TaskRow`（永続化レコード）を分け、`From<&Task>`/`TryFrom<TaskRow>` で変換する
 - **状態遷移**: タスクは Open → Completed/Archived の一方向遷移。Open状態のタスクのみリネーム可能
