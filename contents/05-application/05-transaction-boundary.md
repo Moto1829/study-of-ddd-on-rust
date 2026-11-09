@@ -30,7 +30,97 @@ pub trait TransactionRunner<E> {
 }
 ```
 
-これは実装そのものというより、「トランザクションを張る責務はApplication Serviceの外側にあるが、ユースケース単位で包む」という考え方を示すための最小インターフェースです。
+これは実装そのものというより、「トランザクションを張る仕組みはApplication Serviceの外側(Infrastructure)にあるが、どこを包むかはユースケース単位でApplication Serviceが決める」という考え方を示すための最小インターフェースです。
+
+## 使用例: 複数タスクの一括完了
+
+サンプルコードでは、`TransactionRunner` を使うユースケースとして `BulkTaskCompletionService`(`src/application/bulk_task_completion_service.rs`)を用意しています。指定した複数のタスクをまとめて完了し、1件でも失敗したら全件を取り消す、という方針のユースケースです。
+
+```rust
+pub struct BulkTaskCompletionService<R, T>
+where
+    R: TaskRepository,
+    T: TransactionRunner<TaskApplicationError>,
+{
+    repository: R,
+    transaction_runner: T,
+}
+
+impl<R, T> BulkTaskCompletionService<R, T>
+where
+    R: TaskRepository,
+    T: TransactionRunner<TaskApplicationError>,
+{
+    pub fn complete_tasks<I, S>(&mut self, task_ids: I) -> Result<Vec<TaskOutput>, TaskApplicationError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let repository = &mut self.repository;
+
+        self.transaction_runner.run(|| {
+            let mut outputs = Vec::new();
+
+            for task_id in task_ids {
+                let task_id = TaskId::new(task_id)?;
+                let mut task = repository.find_by_id(&task_id).ok_or_else(|| {
+                    TaskApplicationError::TaskNotFound {
+                        task_id: task_id.value().to_owned(),
+                    }
+                })?;
+
+                task.complete()?;
+                outputs.push(TaskOutput::from(&task));
+                repository.save(task);
+            }
+
+            Ok(outputs)
+        })
+    }
+}
+```
+
+ポイントは次の3つです。
+
+- **境界を決めているのはApplication Service**: `run` に渡すクロージャの範囲が、そのまま1つのトランザクションになる。「全件をまとめて包む」という判断はユースケースの設計そのもの
+- **ドメイン層はトランザクションを知らない**: `Task::complete` は、自分がトランザクションの中で呼ばれているかどうかを気にしない
+- **失敗は `Result` で伝える**: クロージャの中で `?` によって `Err` が返ると、`TransactionRunner` はそれまでの変更を取り消す
+
+なお、クロージャが `self.repository` を可変借用している間に `self.transaction_runner` を不変借用していますが、別々のフィールドなのでRustの借用規則には違反しません。
+
+### インメモリでのロールバック
+
+Infrastructure側には、学習用の実装として `InMemoryTransactionRunner`(`src/infrastructure/in_memory_transaction_runner.rs`)を置いています。`InMemoryTaskRepository` と同じ保存領域を共有し、処理の前にスナップショットを取り、`Err` が返ったらスナップショットへ戻します。
+
+```rust
+impl<E> TransactionRunner<E> for InMemoryTransactionRunner {
+    fn run<T, F>(&self, operation: F) -> Result<T, E>
+    where
+        F: FnOnce() -> Result<T, E>,
+    {
+        let snapshot = self.store.snapshot();
+        let result = operation();
+
+        if result.is_err() {
+            self.store.restore(snapshot);
+        }
+
+        result
+    }
+}
+```
+
+組み立ては次のようになります。Repository と TransactionRunner が同じ保存領域を見ていることが重要です。
+
+```rust
+let repository = InMemoryTaskRepository::new();
+let runner = InMemoryTransactionRunner::new(&repository);
+let mut service = BulkTaskCompletionService::new(repository.clone(), runner);
+```
+
+テスト `bulk_completion_rolls_back_earlier_tasks_when_a_later_task_fails` では、1件目のタスクを完了して保存したあと、2件目が完了済みで失敗するケースを確かめています。結果はエラーになり、1件目の完了も取り消されて `Open` のまま残ります。
+
+本番のDB実装に置き換えるなら、`run` の中で `BEGIN` を発行し、`Ok` なら `COMMIT`、`Err` なら `ROLLBACK` を発行する形になります。その場合は、Repository がトランザクション中の同じ接続を使うように組み立てる必要があります。Application Service のコードは変わりません。
 
 ## 一括更新との関係
 
@@ -40,7 +130,7 @@ pub trait TransactionRunner<E> {
 - 成功した分だけ反映する
 - 失敗を集約して返す
 
-この判断はドメインモデルだけではなく、ユースケースとしての取り扱いに関わります。だからこそ、トランザクション境界はApplication Serviceの話として整理した方が分かりやすいです。
+サンプルの `BulkTaskCompletionService` は、このうち「全件成功でのみ確定する」を選んだ例です。この判断はドメインモデルだけではなく、ユースケースとしての取り扱いに関わります。だからこそ、トランザクション境界はApplication Serviceの話として整理した方が分かりやすいです。
 
 たとえば3件のタスクをまとめて完了する処理で、2件目だけが「すでに完了済み」で失敗したとします。このとき、1件目だけ完了を確定してよいのか、それとも3件とも取り消すべきかは、永続化技術の都合ではなくユースケースの設計判断です。こうした「どの変更を1まとまりとして扱うか」を意識すると、トランザクション境界や Unit of Work の必要性が見えやすくなります。
 

@@ -6,16 +6,17 @@ pub mod presentation;
 #[cfg(test)]
 mod tests {
     use crate::application::{
-        DomainEventPublisher, FindTasksQuery, TaskApplicationError, TaskApplicationService,
+        BulkTaskCompletionService, DomainEventPublisher, TransactionRunner, FindTasksQuery, TaskApplicationError, TaskApplicationService,
         TaskCompletionNotifier, TaskStatusDto, TaskSummaryReader,
     };
     use crate::domain::{
-        OpenTaskLimitPolicy, Task, TaskCreationPolicyError, TaskError, TaskId, TaskStatus,
+        OpenTaskLimitPolicy, Task, TaskCreationPolicyError, TaskError, TaskId, TaskRepository,
+        TaskStatus,
         TaskEvent, TaskTitle, UserId,
     };
     use crate::infrastructure::{
-        InMemoryDomainEventPublisher, InMemoryTaskRepository, LoggingTaskCompletionNotifier,
-        TaskRow,
+        InMemoryDomainEventPublisher, InMemoryTaskRepository, InMemoryTransactionRunner,
+        LoggingTaskCompletionNotifier, TaskRow,
     };
     use crate::presentation::{CliApp, Command, CommandParseError, error_message, parse_command};
 
@@ -292,5 +293,91 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error_message(&error), "タスク missing が見つかりません");
+    }
+
+    #[test]
+    fn bulk_completion_completes_all_tasks_when_every_task_is_open() {
+        let repository = InMemoryTaskRepository::new();
+        let mut task_service = TaskApplicationService::new(repository.clone());
+        task_service.create_task("task-1", "Buy milk").unwrap();
+        task_service.create_task("task-2", "Buy eggs").unwrap();
+
+        let runner = InMemoryTransactionRunner::new(&repository);
+        let mut bulk_service = BulkTaskCompletionService::new(repository.clone(), runner);
+
+        let outputs = bulk_service.complete_tasks(["task-1", "task-2"]).unwrap();
+
+        assert_eq!(outputs.len(), 2);
+        assert!(
+            outputs
+                .iter()
+                .all(|output| output.status == TaskStatusDto::Completed)
+        );
+    }
+
+    #[test]
+    fn bulk_completion_rolls_back_earlier_tasks_when_a_later_task_fails() {
+        let repository = InMemoryTaskRepository::new();
+        let mut task_service = TaskApplicationService::new(repository.clone());
+        task_service.create_task("task-1", "Buy milk").unwrap();
+        task_service.create_task("task-2", "Buy eggs").unwrap();
+        task_service.complete_task("task-2").unwrap();
+
+        let runner = InMemoryTransactionRunner::new(&repository);
+        let mut bulk_service = BulkTaskCompletionService::new(repository.clone(), runner);
+
+        // task-1 は完了・保存されるが、task-2 は完了済みなので失敗する
+        let result = bulk_service.complete_tasks(["task-1", "task-2"]);
+
+        assert_eq!(
+            result,
+            Err(TaskApplicationError::Domain(TaskError::TaskAlreadyCompleted))
+        );
+        // 全件成功のみ確定する方針なので、task-1 の完了も取り消されている
+        assert_eq!(
+            task_service.get_task("task-1").unwrap().status,
+            TaskStatusDto::Open
+        );
+    }
+
+    #[test]
+    fn bulk_completion_rolls_back_when_a_task_is_missing() {
+        let repository = InMemoryTaskRepository::new();
+        let mut task_service = TaskApplicationService::new(repository.clone());
+        task_service.create_task("task-1", "Buy milk").unwrap();
+
+        let runner = InMemoryTransactionRunner::new(&repository);
+        let mut bulk_service = BulkTaskCompletionService::new(repository.clone(), runner);
+
+        let result = bulk_service.complete_tasks(["task-1", "missing"]);
+
+        assert_eq!(
+            result,
+            Err(TaskApplicationError::TaskNotFound {
+                task_id: "missing".to_owned(),
+            })
+        );
+        assert_eq!(
+            task_service.get_task("task-1").unwrap().status,
+            TaskStatusDto::Open
+        );
+    }
+
+    #[test]
+    fn in_memory_transaction_runner_keeps_changes_on_success() {
+        let repository = InMemoryTaskRepository::new();
+        let runner = InMemoryTransactionRunner::new(&repository);
+        let mut writer = repository.clone();
+
+        let result: Result<(), String> = runner.run(|| {
+            writer.save(Task::new(
+                TaskId::new("task-1").unwrap(),
+                TaskTitle::new("Buy milk").unwrap(),
+            ));
+            Ok(())
+        });
+
+        assert!(result.is_ok());
+        assert!(repository.find_by_id(&TaskId::new("task-1").unwrap()).is_some());
     }
 }

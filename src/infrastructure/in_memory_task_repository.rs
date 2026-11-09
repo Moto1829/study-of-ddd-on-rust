@@ -13,6 +13,16 @@ impl InMemoryTaskRepository {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// トランザクション開始時点の状態を複製する(InMemoryTransactionRunner 用)。
+    pub(super) fn snapshot(&self) -> HashMap<TaskId, Task> {
+        self.tasks.read().unwrap().clone()
+    }
+
+    /// 複製しておいた状態へ戻す(InMemoryTransactionRunner 用)。
+    pub(super) fn restore(&self, snapshot: HashMap<TaskId, Task>) {
+        *self.tasks.write().unwrap() = snapshot;
+    }
 }
 
 impl TaskRepository for InMemoryTaskRepository {
