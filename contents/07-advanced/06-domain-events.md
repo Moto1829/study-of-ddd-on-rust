@@ -29,7 +29,7 @@ pub enum TaskEvent {
 }
 ```
 
-この段階では、Entityから自動的にイベントを貯めるところまでは進めていません。まずは「ドメイン上の事実を型で表せる」という最小構成に留めています。
+この段階では、Entityから自動的にイベントを貯めるところまでは進めていません。まずは「ドメイン上の事実を型で表せる」という最小構成に留めています。Aggregate にイベントを貯める形は、第7章-14の `Outboxでイベントを確実に届ける` で扱います。
 
 ## 発行先はInfrastructureへ閉じる
 
@@ -41,7 +41,72 @@ pub trait DomainEventPublisher {
 }
 ```
 
-これにより、Application Serviceは「イベントを発行したい」という意図だけを持ち、実際にどこへ送るかはInfrastructureへ閉じ込められます。
+これにより、Application Serviceは「イベントを発行したい」という意図だけを持ち、実際にどこへ送るかは外側で決められます。
+
+## ユースケースからの発行
+
+サンプルコードの `TaskApplicationService` は、`DomainEventPublisher` をジェネリクスで受け取り、状態を変えるユースケースの最後でイベントを発行しています。
+
+```rust
+pub fn complete_task(
+    &mut self,
+    task_id: impl Into<String>,
+) -> Result<TaskOutput, TaskApplicationError> {
+    let task_id = TaskId::new(task_id)?;
+    let mut task = self.repository.find_by_id(&task_id).ok_or_else(/* ... */)?;
+
+    task.complete()?;
+    let output = TaskOutput::from(&task);
+    let event = TaskEvent::TaskCompleted {
+        task_id: task.id().clone(),
+    };
+    self.repository.save(task);
+    // 状態を確定させてから、起きた事実を発行する
+    self.event_publisher.publish(&event)?;
+
+    Ok(output)
+}
+```
+
+押さえておきたい点は3つあります。
+
+- **保存してから発行する**: イベントは「起きた事実」なので、状態が確定する前に発行してはいけません。`task.complete()` がドメインルールで失敗した場合は、`?` で抜けるためイベントは発行されません
+- **発行の失敗は別のエラーとして返す**: 保存後に発行だけが失敗した場合は `TaskApplicationError::EventPublishFailed` を返します。このとき状態はすでに保存されています。「状態は保存できたが、イベントは届かなかった」というこの問題を確実に解決するには、第7章-14の Outbox が必要になります
+- **一括処理ではトランザクション確定後に発行する**: `BulkTaskCompletionService` は、全件の完了がトランザクションとして確定してから `TaskCompleted` をまとめて発行します。途中で取り消された完了について通知が飛ぶことを防ぐためです
+
+## 購読者と発行先の実装
+
+`DomainEventPublisher` の実装は2つ用意しています。
+
+| 実装 | 層 | 役割 |
+|---|---|---|
+| `TaskCompletedNotificationHandler<N>` | application | `TaskCompleted` を受け取り、`TaskCompletionNotifier` で通知する購読者。`main.rs` で使う |
+| `InMemoryDomainEventPublisher` | infrastructure | 発行されたイベントを記録するだけ。テストで「どのイベントが発行されたか」を確かめる Spy として使う |
+
+同じプロセスの中で同期的にイベントを届ける最小構成では、購読者そのものを発行先として Application Service に渡せます。購読者が複数になったら、受け取ったイベントを複数の購読者へ配る小さなディスパッチャーを `DomainEventPublisher` として実装すれば、Application Service を変えずに副作用を増やせます。
+
+テストでは `InMemoryDomainEventPublisher` を渡して、ユースケースが正しいイベントを正しい順番で発行していることを確かめています。
+
+```rust
+#[test]
+fn application_service_publishes_events_for_state_changes() {
+    let (mut service, publisher) = new_service_with_limit(InMemoryTaskRepository::new(), 100);
+
+    service.create_task("task-1", "Buy milk").unwrap();
+    service.complete_task("task-1").unwrap();
+    service.archive_task("task-1").unwrap();
+
+    let task_id = TaskId::new("task-1").unwrap();
+    assert_eq!(
+        publisher.events(),
+        vec![
+            TaskEvent::TaskCreated { task_id: task_id.clone() },
+            TaskEvent::TaskCompleted { task_id: task_id.clone() },
+            TaskEvent::TaskArchived { task_id },
+        ]
+    );
+}
+```
 
 ## どういう順番で導入するべきか
 

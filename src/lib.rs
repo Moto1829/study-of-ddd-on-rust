@@ -5,9 +5,12 @@ pub mod presentation;
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use crate::application::{
-        BulkTaskCompletionService, DomainEventPublisher, TransactionRunner, FindTasksQuery, TaskApplicationError, TaskApplicationService,
-        TaskCompletionNotifier, TaskStatusDto, TaskSummaryReader,
+        BulkTaskCompletionService, DomainEventPublisher, FindTasksQuery, NotificationError,
+        TaskApplicationError, TaskApplicationService, TaskCompletedNotificationHandler,
+        TaskCompletionNotifier, TaskStatusDto, TaskSummaryReader, TransactionRunner,
     };
     use crate::domain::{
         OpenTaskLimitPolicy, Task, TaskCreationPolicyError, TaskError, TaskId, TaskRepository,
@@ -19,6 +22,40 @@ mod tests {
         LoggingTaskCompletionNotifier, TaskRow,
     };
     use crate::presentation::{CliApp, Command, CommandParseError, error_message, parse_command};
+
+    type TestService = TaskApplicationService<InMemoryTaskRepository, InMemoryDomainEventPublisher>;
+
+    /// テスト用の小さなコンポジションルート。発行されたイベントは publisher に記録される。
+    fn new_service_with_limit(
+        repository: InMemoryTaskRepository,
+        max_open_tasks: usize,
+    ) -> (TestService, InMemoryDomainEventPublisher) {
+        let publisher = InMemoryDomainEventPublisher::new();
+        let service = TaskApplicationService::new(
+            repository,
+            publisher.clone(),
+            OpenTaskLimitPolicy::new(max_open_tasks),
+            UserId::new("user-1").unwrap(),
+        );
+        (service, publisher)
+    }
+
+    fn new_service(repository: InMemoryTaskRepository) -> TestService {
+        new_service_with_limit(repository, 100).0
+    }
+
+    /// 通知されたタスクIDを記録する Spy。
+    #[derive(Default)]
+    struct SpyNotifier {
+        notified: RefCell<Vec<String>>,
+    }
+
+    impl TaskCompletionNotifier for &SpyNotifier {
+        fn notify_task_completed(&self, task_id: &str) -> Result<(), NotificationError> {
+            self.notified.borrow_mut().push(task_id.to_owned());
+            Ok(())
+        }
+    }
 
     #[test]
     fn task_title_rejects_empty_input() {
@@ -86,7 +123,7 @@ mod tests {
     #[test]
     fn application_service_creates_task() {
         let repository = InMemoryTaskRepository::new();
-        let mut service = TaskApplicationService::new(repository);
+        let mut service = new_service(repository);
 
         let created = service.create_task("task-1", "Write repository chapter").unwrap();
 
@@ -98,7 +135,7 @@ mod tests {
     #[test]
     fn application_service_rejects_duplicate_task_ids() {
         let repository = InMemoryTaskRepository::new();
-        let mut service = TaskApplicationService::new(repository);
+        let mut service = new_service(repository);
 
         service.create_task("task-1", "Write repository chapter").unwrap();
         let result = service.create_task("task-1", "Write service chapter");
@@ -114,7 +151,7 @@ mod tests {
     #[test]
     fn application_service_completes_existing_task() {
         let repository = InMemoryTaskRepository::new();
-        let mut service = TaskApplicationService::new(repository);
+        let mut service = new_service(repository);
 
         service.create_task("task-1", "Finish sample app").unwrap();
         let completed = service.complete_task("task-1").unwrap();
@@ -125,7 +162,7 @@ mod tests {
     #[test]
     fn application_service_archives_existing_task() {
         let repository = InMemoryTaskRepository::new();
-        let mut service = TaskApplicationService::new(repository);
+        let mut service = new_service(repository);
 
         service.create_task("task-1", "Archive sample").unwrap();
         let archived = service.archive_task("task-1").unwrap();
@@ -136,7 +173,7 @@ mod tests {
     #[test]
     fn application_service_returns_not_found_for_unknown_task() {
         let repository = InMemoryTaskRepository::new();
-        let service = TaskApplicationService::new(repository);
+        let service = new_service(repository);
 
         let result = service.get_task("missing-task");
 
@@ -151,7 +188,7 @@ mod tests {
     #[test]
     fn query_returns_only_open_tasks() {
         let repository = InMemoryTaskRepository::new();
-        let mut service = TaskApplicationService::new(repository.clone());
+        let mut service = new_service(repository.clone());
 
         service.create_task("task-1", "Open task").unwrap();
         service.create_task("task-2", "Done task").unwrap();
@@ -267,7 +304,7 @@ mod tests {
     #[test]
     fn cli_app_shares_state_between_service_and_reader() {
         let repository = InMemoryTaskRepository::new();
-        let service = TaskApplicationService::new(repository.clone());
+        let service = new_service(repository.clone());
         let mut app = CliApp::new(service, repository, 20);
 
         app.execute(Command::Create {
@@ -283,7 +320,7 @@ mod tests {
     #[test]
     fn cli_converts_application_error_to_user_message() {
         let repository = InMemoryTaskRepository::new();
-        let service = TaskApplicationService::new(repository.clone());
+        let service = new_service(repository.clone());
         let mut app = CliApp::new(service, repository, 20);
 
         let error = app
@@ -298,12 +335,12 @@ mod tests {
     #[test]
     fn bulk_completion_completes_all_tasks_when_every_task_is_open() {
         let repository = InMemoryTaskRepository::new();
-        let mut task_service = TaskApplicationService::new(repository.clone());
+        let mut task_service = new_service(repository.clone());
         task_service.create_task("task-1", "Buy milk").unwrap();
         task_service.create_task("task-2", "Buy eggs").unwrap();
 
         let runner = InMemoryTransactionRunner::new(&repository);
-        let mut bulk_service = BulkTaskCompletionService::new(repository.clone(), runner);
+        let mut bulk_service = BulkTaskCompletionService::new(repository.clone(), runner, InMemoryDomainEventPublisher::new());
 
         let outputs = bulk_service.complete_tasks(["task-1", "task-2"]).unwrap();
 
@@ -318,13 +355,13 @@ mod tests {
     #[test]
     fn bulk_completion_rolls_back_earlier_tasks_when_a_later_task_fails() {
         let repository = InMemoryTaskRepository::new();
-        let mut task_service = TaskApplicationService::new(repository.clone());
+        let mut task_service = new_service(repository.clone());
         task_service.create_task("task-1", "Buy milk").unwrap();
         task_service.create_task("task-2", "Buy eggs").unwrap();
         task_service.complete_task("task-2").unwrap();
 
         let runner = InMemoryTransactionRunner::new(&repository);
-        let mut bulk_service = BulkTaskCompletionService::new(repository.clone(), runner);
+        let mut bulk_service = BulkTaskCompletionService::new(repository.clone(), runner, InMemoryDomainEventPublisher::new());
 
         // task-1 は完了・保存されるが、task-2 は完了済みなので失敗する
         let result = bulk_service.complete_tasks(["task-1", "task-2"]);
@@ -343,11 +380,11 @@ mod tests {
     #[test]
     fn bulk_completion_rolls_back_when_a_task_is_missing() {
         let repository = InMemoryTaskRepository::new();
-        let mut task_service = TaskApplicationService::new(repository.clone());
+        let mut task_service = new_service(repository.clone());
         task_service.create_task("task-1", "Buy milk").unwrap();
 
         let runner = InMemoryTransactionRunner::new(&repository);
-        let mut bulk_service = BulkTaskCompletionService::new(repository.clone(), runner);
+        let mut bulk_service = BulkTaskCompletionService::new(repository.clone(), runner, InMemoryDomainEventPublisher::new());
 
         let result = bulk_service.complete_tasks(["task-1", "missing"]);
 
@@ -379,5 +416,149 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(repository.find_by_id(&TaskId::new("task-1").unwrap()).is_some());
+    }
+
+    #[test]
+    fn application_service_publishes_events_for_state_changes() {
+        let (mut service, publisher) = new_service_with_limit(InMemoryTaskRepository::new(), 100);
+
+        service.create_task("task-1", "Buy milk").unwrap();
+        service.complete_task("task-1").unwrap();
+        service.archive_task("task-1").unwrap();
+
+        let task_id = TaskId::new("task-1").unwrap();
+        assert_eq!(
+            publisher.events(),
+            vec![
+                TaskEvent::TaskCreated {
+                    task_id: task_id.clone()
+                },
+                TaskEvent::TaskCompleted {
+                    task_id: task_id.clone()
+                },
+                TaskEvent::TaskArchived { task_id },
+            ]
+        );
+    }
+
+    #[test]
+    fn application_service_does_not_publish_event_when_domain_rule_fails() {
+        let (mut service, publisher) = new_service_with_limit(InMemoryTaskRepository::new(), 100);
+        service.create_task("task-1", "Buy milk").unwrap();
+        service.complete_task("task-1").unwrap();
+
+        let result = service.complete_task("task-1");
+
+        assert!(result.is_err());
+        // TaskCreated と 1回目の TaskCompleted だけ
+        assert_eq!(publisher.events().len(), 2);
+    }
+
+    #[test]
+    fn application_service_rejects_creation_over_open_task_limit() {
+        let (mut service, _) = new_service_with_limit(InMemoryTaskRepository::new(), 2);
+        service.create_task("task-1", "Buy milk").unwrap();
+        service.create_task("task-2", "Buy eggs").unwrap();
+
+        let result = service.create_task("task-3", "Buy bread");
+
+        assert_eq!(
+            result,
+            Err(TaskApplicationError::CreationPolicy(
+                TaskCreationPolicyError::OpenTaskLimitExceeded {
+                    user_id: "user-1".to_owned(),
+                    max: 2,
+                    actual: 2,
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn completing_a_task_frees_up_the_open_task_limit() {
+        let (mut service, _) = new_service_with_limit(InMemoryTaskRepository::new(), 2);
+        service.create_task("task-1", "Buy milk").unwrap();
+        service.create_task("task-2", "Buy eggs").unwrap();
+        service.complete_task("task-1").unwrap();
+
+        let result = service.create_task("task-3", "Buy bread");
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn repository_counts_only_open_tasks() {
+        let repository = InMemoryTaskRepository::new();
+        let mut service = new_service(repository.clone());
+        service.create_task("task-1", "Open task").unwrap();
+        service.create_task("task-2", "Done task").unwrap();
+        service.complete_task("task-2").unwrap();
+
+        assert_eq!(repository.count_open_tasks(), 1);
+    }
+
+    #[test]
+    fn notification_handler_notifies_only_on_task_completed() {
+        let spy = SpyNotifier::default();
+        let handler = TaskCompletedNotificationHandler::new(&spy);
+        let task_id = TaskId::new("task-1").unwrap();
+
+        handler
+            .publish(&TaskEvent::TaskCreated {
+                task_id: task_id.clone(),
+            })
+            .unwrap();
+        handler
+            .publish(&TaskEvent::TaskCompleted {
+                task_id: task_id.clone(),
+            })
+            .unwrap();
+        handler
+            .publish(&TaskEvent::TaskArchived { task_id })
+            .unwrap();
+
+        assert_eq!(*spy.notified.borrow(), vec!["task-1".to_owned()]);
+    }
+
+    #[test]
+    fn completing_task_through_application_service_sends_notification() {
+        let spy = SpyNotifier::default();
+        let mut service = TaskApplicationService::new(
+            InMemoryTaskRepository::new(),
+            TaskCompletedNotificationHandler::new(&spy),
+            OpenTaskLimitPolicy::default(),
+            UserId::new("user-1").unwrap(),
+        );
+
+        service.create_task("task-1", "Buy milk").unwrap();
+        service.complete_task("task-1").unwrap();
+
+        assert_eq!(*spy.notified.borrow(), vec!["task-1".to_owned()]);
+    }
+
+    #[test]
+    fn bulk_completion_publishes_events_only_after_commit() {
+        let repository = InMemoryTaskRepository::new();
+        let mut task_service = new_service(repository.clone());
+        task_service.create_task("task-1", "Buy milk").unwrap();
+        task_service.create_task("task-2", "Buy eggs").unwrap();
+        task_service.complete_task("task-2").unwrap();
+
+        let publisher = InMemoryDomainEventPublisher::new();
+        let runner = InMemoryTransactionRunner::new(&repository);
+        let mut bulk_service =
+            BulkTaskCompletionService::new(repository.clone(), runner, publisher.clone());
+
+        // task-2 が完了済みなので全体が取り消される。取り消された task-1 の完了イベントも出ない
+        assert!(bulk_service.complete_tasks(["task-1", "task-2"]).is_err());
+        assert!(publisher.events().is_empty());
+
+        bulk_service.complete_tasks(["task-1"]).unwrap();
+        assert_eq!(
+            publisher.events(),
+            vec![TaskEvent::TaskCompleted {
+                task_id: TaskId::new("task-1").unwrap()
+            }]
+        );
     }
 }

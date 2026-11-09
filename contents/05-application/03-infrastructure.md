@@ -22,7 +22,7 @@ Infrastructure層は、ドメインの外側にある技術的関心事を受け
 
 インメモリ実装は単なる手抜きではありません。学習段階では、永続化技術よりも境界設計そのものを理解する方が重要です。
 
-この実装では `HashMap<TaskId, Task>` のような単純なメモリ上の対応表を使って保存しています。これにより、Application Service はDBの知識を一切持たず、Repositoryトレイトだけに依存できます。
+この実装では `HashMap<String, TaskRow>` という単純なメモリ上の対応表をDBのテーブルに見立てて保存しています。保存するのは `Task` そのものではなく、DBの行に近い `TaskRow` です。保存時に `Task` から `TaskRow` へ、取得時に `TaskRow` から `Task` へ変換することで、DB実装と同じ「行とドメインモデルの境界」をメモリ上で再現しています。Application Service はDBの知識を一切持たず、Repositoryトレイトだけに依存できます。
 
 ## 本番向け実装へ進むときの考え方
 
@@ -32,7 +32,7 @@ DB実装に進むときも、方針は変わりません。
 - 永続化モデルはDB都合で設計する
 - 両者の変換はInfrastructure側で引き受ける
 
-たとえば `TaskRow` のような構造体を置き、SQLやORMの結果を一度そこへ受けた上で `Task` に変換する、という形は実務でもかなり扱いやすいです。`TaskRow` はDBレコードに近い形の中間表現だと考えると十分です。DBモデル分離の具体例は発展章の `DB連携と永続化モデルの分離` で詳しく扱います。
+たとえば `TaskRow` のような構造体を置き、SQLやORMの結果を一度そこへ受けた上で `Task` に変換する、という形は実務でもかなり扱いやすいです。サンプルの `InMemoryTaskRepository` もすでにこの形で書かれているので、DB実装に置き換えるときは「`HashMap` への出し入れ」を「SQLの実行」に差し替えるだけで済みます。`TaskRow` はDBレコードに近い形の中間表現だと考えると十分です。DBモデル分離の具体例は発展章の `DB連携と永続化モデルの分離` で詳しく扱います。
 
 ここを崩してORM中心でモデルを作ると、ドメインルールよりテーブル都合が前に出やすくなります。
 
@@ -61,22 +61,29 @@ DB実装に進むときも、方針は変わりません。
 本書のサンプルコードは `lib.rs` のみのライブラリ構成で、組み立てはテストの中で行っています。実行可能なアプリケーションにするなら、`main.rs` がコンポジションルートになります。
 
 ```rust
-use study_of_ddd_on_rust::application::TaskApplicationService;
-use study_of_ddd_on_rust::infrastructure::InMemoryTaskRepository;
+use study_of_ddd_on_rust::application::{TaskApplicationService, TaskCompletedNotificationHandler};
+use study_of_ddd_on_rust::domain::{OpenTaskLimitPolicy, UserId};
+use study_of_ddd_on_rust::infrastructure::{InMemoryTaskRepository, LoggingTaskCompletionNotifier};
 
 fn main() {
     // ここで具象型を選ぶ。将来DB実装に差し替えるときも、変更はこの行だけで済む
     let repository = InMemoryTaskRepository::new();
+    let event_publisher = TaskCompletedNotificationHandler::new(LoggingTaskCompletionNotifier);
 
     // Application Service にはトレイトを満たす値として注入する
-    let mut service = TaskApplicationService::new(repository);
+    let mut service = TaskApplicationService::new(
+        repository,
+        event_publisher,
+        OpenTaskLimitPolicy::default(),
+        UserId::new("me").unwrap(),
+    );
 
     let task = service.create_task("task-1", "Write chapter draft").unwrap();
     println!("{:?}", task);
 }
 ```
 
-`TaskApplicationService<R: TaskRepository>` はジェネリクスで書かれているため、`R` に何を入れるかは呼び出し側が決めます。その「呼び出し側の一番外側」がコンポジションルートです。たとえば PostgreSQL 実装を追加した場合でも、`TaskApplicationService` やドメイン層のコードには手を入れず、`main.rs` で生成する Repository を差し替えるだけで済みます。
+`TaskApplicationService<R: TaskRepository, P: DomainEventPublisher>` はジェネリクスで書かれているため、`R` や `P` に何を入れるかは呼び出し側が決めます。その「呼び出し側の一番外側」がコンポジションルートです。たとえば PostgreSQL 実装を追加した場合でも、`TaskApplicationService` やドメイン層のコードには手を入れず、`main.rs` で生成する Repository を差し替えるだけで済みます。
 
 テストコードで `InMemoryTaskRepository` を生成して `TaskApplicationService::new` に渡しているのも、テスト用の小さなコンポジションルートだと見ることができます。
 

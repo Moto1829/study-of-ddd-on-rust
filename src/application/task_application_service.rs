@@ -1,15 +1,38 @@
-use crate::domain::{Task, TaskError, TaskId, TaskRepository, TaskStatus, TaskTitle};
+use crate::domain::{
+    OpenTaskLimitPolicy, Task, TaskCreationPolicyError, TaskError, TaskEvent, TaskId,
+    TaskRepository, TaskStatus, TaskTitle, UserId,
+};
+
+use super::{DomainEventPublishError, DomainEventPublisher};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskApplicationError {
     TaskAlreadyExists { task_id: String },
     TaskNotFound { task_id: String },
     Domain(TaskError),
+    /// Domain Service(作成上限ポリシー)による拒否
+    CreationPolicy(TaskCreationPolicyError),
+    /// 状態の保存後に、イベントの発行だけが失敗した
+    EventPublishFailed { reason: String },
 }
 
 impl From<TaskError> for TaskApplicationError {
     fn from(value: TaskError) -> Self {
         Self::Domain(value)
+    }
+}
+
+impl From<TaskCreationPolicyError> for TaskApplicationError {
+    fn from(value: TaskCreationPolicyError) -> Self {
+        Self::CreationPolicy(value)
+    }
+}
+
+impl From<DomainEventPublishError> for TaskApplicationError {
+    fn from(value: DomainEventPublishError) -> Self {
+        match value {
+            DomainEventPublishError::PublishFailed { reason } => Self::EventPublishFailed { reason },
+        }
     }
 }
 
@@ -27,19 +50,42 @@ pub struct TaskOutput {
     pub status: TaskStatusDto,
 }
 
-pub struct TaskApplicationService<R>
+/// タスクに関するユースケースの進行役。
+///
+/// - `repository`: Aggregate(`Task`)の保存と取得
+/// - `event_publisher`: 状態変更の事実(`TaskEvent`)を外へ伝える
+/// - `creation_policy` / `owner`: 未完了タスク数の上限を判定する Domain Service と、その対象ユーザー
+///
+/// このアプリは「個人向けタスク管理」という1つの Bounded Context なので、
+/// 1つの Repository に入っているタスクはすべて `owner` のものとして扱う。
+pub struct TaskApplicationService<R, P>
 where
     R: TaskRepository,
+    P: DomainEventPublisher,
 {
     repository: R,
+    event_publisher: P,
+    creation_policy: OpenTaskLimitPolicy,
+    owner: UserId,
 }
 
-impl<R> TaskApplicationService<R>
+impl<R, P> TaskApplicationService<R, P>
 where
     R: TaskRepository,
+    P: DomainEventPublisher,
 {
-    pub fn new(repository: R) -> Self {
-        Self { repository }
+    pub fn new(
+        repository: R,
+        event_publisher: P,
+        creation_policy: OpenTaskLimitPolicy,
+        owner: UserId,
+    ) -> Self {
+        Self {
+            repository,
+            event_publisher,
+            creation_policy,
+            owner,
+        }
     }
 
     pub fn create_task(
@@ -48,6 +94,7 @@ where
         title: impl Into<String>,
     ) -> Result<TaskOutput, TaskApplicationError> {
         let task_id = TaskId::new(task_id)?;
+        let title = TaskTitle::new(title)?;
 
         if self.repository.find_by_id(&task_id).is_some() {
             return Err(TaskApplicationError::TaskAlreadyExists {
@@ -55,9 +102,19 @@ where
             });
         }
 
-        let task = Task::new(task_id, TaskTitle::new(title)?);
+        // 件数を数えるのは Repository、作成してよいかを判断するのは Domain Service
+        let open_task_count = self.repository.count_open_tasks();
+        self.creation_policy
+            .ensure_can_create(&self.owner, open_task_count)?;
+
+        let task = Task::new(task_id, title);
         let output = TaskOutput::from(&task);
+        let event = TaskEvent::TaskCreated {
+            task_id: task.id().clone(),
+        };
         self.repository.save(task);
+        // 状態を確定させてから、起きた事実を発行する
+        self.event_publisher.publish(&event)?;
 
         Ok(output)
     }
@@ -108,7 +165,11 @@ where
 
         task.complete()?;
         let output = TaskOutput::from(&task);
+        let event = TaskEvent::TaskCompleted {
+            task_id: task.id().clone(),
+        };
         self.repository.save(task);
+        self.event_publisher.publish(&event)?;
 
         Ok(output)
     }
@@ -127,7 +188,11 @@ where
 
         task.archive()?;
         let output = TaskOutput::from(&task);
+        let event = TaskEvent::TaskArchived {
+            task_id: task.id().clone(),
+        };
         self.repository.save(task);
+        self.event_publisher.publish(&event)?;
 
         Ok(output)
     }

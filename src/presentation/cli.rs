@@ -1,8 +1,8 @@
 use crate::application::{
-    FindTasksQuery, TaskApplicationError, TaskApplicationService, TaskOutput, TaskStatusDto,
+    DomainEventPublisher, FindTasksQuery, TaskApplicationError, TaskApplicationService, TaskOutput, TaskStatusDto,
     TaskSummary, TaskSummaryReader,
 };
-use crate::domain::{TaskError, TaskRepository};
+use crate::domain::{TaskCreationPolicyError, TaskError, TaskRepository};
 
 pub const HELP_TEXT: &str = "\
 commands:
@@ -123,22 +123,24 @@ fn require_id_and_title(
 ///
 /// 具体的なRepositoryやReaderの型は知らず、トレイト境界だけに依存する。
 /// どの実装を渡すかは `main.rs`(コンポジションルート)が決める。
-pub struct CliApp<R, Q>
+pub struct CliApp<R, P, Q>
 where
     R: TaskRepository,
+    P: DomainEventPublisher,
     Q: TaskSummaryReader,
 {
-    service: TaskApplicationService<R>,
+    service: TaskApplicationService<R, P>,
     reader: Q,
     per_page: u64,
 }
 
-impl<R, Q> CliApp<R, Q>
+impl<R, P, Q> CliApp<R, P, Q>
 where
     R: TaskRepository,
+    P: DomainEventPublisher,
     Q: TaskSummaryReader,
 {
-    pub fn new(service: TaskApplicationService<R>, reader: Q, per_page: u64) -> Self {
+    pub fn new(service: TaskApplicationService<R, P>, reader: Q, per_page: u64) -> Self {
         Self {
             service,
             reader,
@@ -211,6 +213,15 @@ pub fn error_message(error: &TaskApplicationError) -> String {
             }
             TaskError::InvalidTaskStatus { value } => format!("不正な状態です: {value}"),
         },
+        TaskApplicationError::CreationPolicy(error) => match error {
+            TaskCreationPolicyError::EmptyUserId => "ユーザーIDが設定されていません".to_owned(),
+            TaskCreationPolicyError::OpenTaskLimitExceeded { max, .. } => format!(
+                "未完了のタスクは{max}件までです。完了かアーカイブをしてから作成してください"
+            ),
+        },
+        TaskApplicationError::EventPublishFailed { reason } => {
+            format!("処理は保存されましたが、後続の通知に失敗しました: {reason}")
+        }
     }
 }
 

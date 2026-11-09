@@ -60,6 +60,29 @@ impl From<&Task> for TaskRow {
 }
 ```
 
+サンプルの `InMemoryTaskRepository` は、この2つの変換を実際に使っています。内部では `HashMap<String, TaskRow>` をテーブルに見立てて `TaskRow` を保持し、`save` では `TaskRow::from(&task)`、`find_by_id` では `Task::try_from(row)` を通します。
+
+```rust
+impl TaskRepository for InMemoryTaskRepository {
+    fn save(&mut self, task: Task) {
+        let row = TaskRow::from(&task);
+        self.rows.write().unwrap().insert(row.id.clone(), row);
+    }
+
+    fn find_by_id(&self, task_id: &TaskId) -> Option<Task> {
+        self.rows
+            .read()
+            .unwrap()
+            .get(task_id.value())
+            .cloned()
+            .map(Self::to_task)
+    }
+    // ...
+}
+```
+
+`to_task` の中では、変換の失敗を `expect` で扱っています。このテーブルへ書き込む経路が `save`(妥当な `Task` からの変換)だけなので、失敗しないことが保証できるからです。外部からも書き込まれる本物のDBでは不正な行がありうるため、`Repository` のメソッドが `Result` を返し、変換の失敗を `RepositoryError` として伝えるべきです(第5章-7の `層ごとのエラー設計` を参照)。
+
 この往復を分ける利点は、DB表現を変えたときの影響範囲がInfrastructureに留まりやすいことです。たとえば `status` を文字列から整数コードへ変える場合でも、ドメインモデル全体を引きずらずに済みます。
 
 ## 変換でどこまで厳密に失敗させるか

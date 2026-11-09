@@ -41,14 +41,15 @@ src/
 │   ├── task_creation_policy.rs  # Domain Service: OpenTaskLimitPolicy
 │   └── task_event.rs     # Domain Event: TaskEvent
 ├── application/      # アプリケーション層
-│   ├── task_application_service.rs  # ユースケース実装 (TaskApplicationService<R>)
+│   ├── task_application_service.rs  # ユースケース実装 (TaskApplicationService<R, P>: 作成上限ポリシー判定・イベント発行)
 │   ├── bulk_task_completion_service.rs  # 一括完了ユースケース (TransactionRunnerの使用例)
+│   ├── task_completed_notification_handler.rs  # TaskCompleted を受けて通知する購読者 (DomainEventPublisher実装)
 │   ├── task_query_service.rs        # 読み取りモデル (TaskSummaryReader トレイト)
 │   ├── task_completion_notifier.rs  # 外部通知トレイト
 │   ├── domain_event_publisher.rs    # イベント発行トレイト
 │   └── transaction_runner.rs        # トランザクション境界トレイト
 ├── infrastructure/   # インフラ層
-│   ├── in_memory_task_repository.rs  # InMemoryTaskRepository (TaskRepository実装)
+│   ├── in_memory_task_repository.rs  # InMemoryTaskRepository (TaskRepository実装、内部は TaskRow で保持)
 │   ├── in_memory_transaction_runner.rs  # InMemoryTransactionRunner (スナップショットでロールバック)
 │   ├── persistence/task_row.rs       # TaskRow (DBレコード相当の永続化モデル)
 │   └── external/

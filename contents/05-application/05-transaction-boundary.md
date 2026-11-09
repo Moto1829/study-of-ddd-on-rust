@@ -115,8 +115,11 @@ impl<E> TransactionRunner<E> for InMemoryTransactionRunner {
 ```rust
 let repository = InMemoryTaskRepository::new();
 let runner = InMemoryTransactionRunner::new(&repository);
-let mut service = BulkTaskCompletionService::new(repository.clone(), runner);
+let publisher = TaskCompletedNotificationHandler::new(LoggingTaskCompletionNotifier);
+let mut service = BulkTaskCompletionService::new(repository.clone(), runner, publisher);
 ```
+
+`BulkTaskCompletionService` は、`run` が `Ok` を返したあと、つまりトランザクションが確定してから `TaskCompleted` イベントをまとめて発行します。`run` の中で発行すると、あとで取り消された完了についても通知が飛んでしまうからです。イベント発行の詳しい考え方は、第7章-6の `ドメインイベントによる副作用の分離` を参照してください。
 
 テスト `bulk_completion_rolls_back_earlier_tasks_when_a_later_task_fails` では、1件目のタスクを完了して保存したあと、2件目が完了済みで失敗するケースを確かめています。結果はエラーになり、1件目の完了も取り消されて `Open` のまま残ります。
 

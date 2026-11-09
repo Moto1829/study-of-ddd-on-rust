@@ -78,6 +78,7 @@ task.rename(TaskTitle::new(new_title)?)?;
 pub trait TaskRepository {
     fn save(&mut self, task: Task);
     fn find_by_id(&self, task_id: &TaskId) -> Option<Task>;
+    fn count_open_tasks(&self) -> usize;
 }
 ```
 

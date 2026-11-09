@@ -20,6 +20,10 @@
 
 ここで、重複IDの判定は `Task` 単体ではできません。保存済みデータとの照合が必要なので、Application Serviceの責務として扱うのが自然です。
 
+さらに、未完了タスク数の上限も確認します。Repository の `count_open_tasks` で件数を数え、Domain Service の `OpenTaskLimitPolicy` に作成してよいかを判断させます(第4章-5)。上限を超えていれば `TaskApplicationError::CreationPolicy` になります。
+
+保存が終わったら、`TaskEvent::TaskCreated` を発行します。完了とアーカイブでも同様に、`TaskCompleted`、`TaskArchived` を発行します。完了イベントを受けて通知を送る仕組みは、第5章-6と第7章-6で扱います。
+
 ## 完了処理の流れ
 
 完了処理では、Repositoryから対象タスクを取得し、`Task::complete` を呼び、保存し直します。もしタスクが存在しなければApplication Error、すでに完了済みならDomain Errorです。

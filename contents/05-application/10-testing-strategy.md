@@ -107,10 +107,32 @@ Application Service のテストでは、Repository などの依存をテスト�
 
 本書の `InMemoryTaskRepository` は Fake です。本物のDBと同じように保存と取得ができるため、ユースケースの流れを自然に検証できます。
 
+`TaskApplicationService` は Repository のほかにイベントの発行先や作成上限ポリシーも受け取るため、テストでは組み立てをヘルパー関数にまとめています。これもテスト用の小さなコンポジションルートです。
+
+```rust
+fn new_service_with_limit(
+    repository: InMemoryTaskRepository,
+    max_open_tasks: usize,
+) -> (TestService, InMemoryDomainEventPublisher) {
+    let publisher = InMemoryDomainEventPublisher::new();
+    let service = TaskApplicationService::new(
+        repository,
+        publisher.clone(),
+        OpenTaskLimitPolicy::new(max_open_tasks),
+        UserId::new("user-1").unwrap(),
+    );
+    (service, publisher)
+}
+
+fn new_service(repository: InMemoryTaskRepository) -> TestService {
+    new_service_with_limit(repository, 100).0
+}
+```
+
 ```rust
 #[test]
 fn application_service_completes_existing_task() {
-    let mut service = TaskApplicationService::new(InMemoryTaskRepository::new());
+    let mut service = new_service(InMemoryTaskRepository::new());
     service.create_task("task-1", "牛乳を買う").unwrap();
 
     let output = service.complete_task("task-1").unwrap();

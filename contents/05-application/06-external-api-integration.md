@@ -22,7 +22,68 @@ pub trait TaskCompletionNotifier {
 
 これに対して、Infrastructure側には `LoggingTaskCompletionNotifier` のような最小実装を置けます。実際のメール送信やWebhook呼び出しではありませんが、「外部連携の詳細はInfrastructureに置く」という形は示せます。
 
-ここでは、通知をApplication Serviceから呼ぶ最小構成を概念例として理解できれば十分です。後からドメインイベント経由へ発展させる余地がある、という順番で読むと混乱しにくくなります。
+`LoggingTaskCompletionNotifier` は、実際の送信の代わりに標準エラー出力へログを書きます。
+
+```rust
+impl TaskCompletionNotifier for LoggingTaskCompletionNotifier {
+    fn notify_task_completed(&self, task_id: &str) -> Result<(), NotificationError> {
+        if task_id.trim().is_empty() {
+            return Err(NotificationError::SendFailed {
+                reason: "task id must not be empty".to_owned(),
+            });
+        }
+
+        // 実際のメール送信やWebhookの代わりに、標準エラー出力へログを書く
+        eprintln!("[通知] タスク {task_id} が完了しました");
+        Ok(())
+    }
+}
+```
+
+## サンプルでの呼び出し方
+
+最も単純なのは、Application Service の `complete_task` の中で notifier を直接呼ぶ形です。ただしこの形だと、Application Service が「完了したら通知する」という後続の処理まで知ることになり、通知以外の副作用(監査ログなど)が増えるたびに Application Service を書き換えることになります。
+
+そこでサンプルコードでは、一歩進めてドメインイベント経由で呼び出しています。
+
+1. `TaskApplicationService::complete_task` は、タスクを保存したあと `TaskEvent::TaskCompleted` を発行するだけ
+2. `TaskCompletedNotificationHandler`(application層)がそのイベントを受け取り、`TaskCompletionNotifier` を呼ぶ
+3. `LoggingTaskCompletionNotifier`(infrastructure層)が実際の通知を行う
+
+```rust
+impl<N> DomainEventPublisher for TaskCompletedNotificationHandler<N>
+where
+    N: TaskCompletionNotifier,
+{
+    fn publish(&self, event: &TaskEvent) -> Result<(), DomainEventPublishError> {
+        match event {
+            TaskEvent::TaskCompleted { task_id } => self
+                .notifier
+                .notify_task_completed(task_id.value())
+                .map_err(|error| DomainEventPublishError::PublishFailed {
+                    reason: format!("{error:?}"),
+                }),
+            TaskEvent::TaskCreated { .. } | TaskEvent::TaskArchived { .. } => Ok(()),
+        }
+    }
+}
+```
+
+組み立ては `main.rs` で行います。
+
+```rust
+let event_publisher = TaskCompletedNotificationHandler::new(LoggingTaskCompletionNotifier);
+```
+
+CLIでタスクを完了すると、通知のログが出力されます。
+
+```text
+> complete t1
+[通知] タスク t1 が完了しました
+完了にしました: [t1] 牛乳を買う (completed)
+```
+
+テストでは、通知されたタスクIDを記録する Spy を notifier として渡し、「完了したときだけ通知される」ことを確かめています(`notification_handler_notifies_only_on_task_completed`、`completing_task_through_application_service_sends_notification`)。イベントの仕組みそのものは、発展章の `ドメインイベントによる副作用の分離` で詳しく扱います。
 
 ## 重要なのは依存方向
 

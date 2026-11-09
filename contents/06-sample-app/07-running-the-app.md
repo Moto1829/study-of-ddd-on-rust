@@ -42,8 +42,9 @@ Cargoは、`src/lib.rs` があればライブラリクレート、`src/main.rs` 
 
 ```rust
 // main.rs から見ると、lib.rs 側は外部クレートと同じ扱いになる
-use study_of_ddd_on_rust::application::TaskApplicationService;
-use study_of_ddd_on_rust::infrastructure::InMemoryTaskRepository;
+use study_of_ddd_on_rust::application::{TaskApplicationService, TaskCompletedNotificationHandler};
+use study_of_ddd_on_rust::domain::{OpenTaskLimitPolicy, UserId};
+use study_of_ddd_on_rust::infrastructure::{InMemoryTaskRepository, LoggingTaskCompletionNotifier};
 use study_of_ddd_on_rust::presentation::{CliApp, Command, parse_command};
 ```
 
@@ -85,7 +86,18 @@ fn run() -> Result<(), String> {
 
     // 2. 依存の組み立て(コンポジションルート)
     let repository = InMemoryTaskRepository::new();
-    let service = TaskApplicationService::new(repository.clone());
+    let event_publisher = TaskCompletedNotificationHandler::new(LoggingTaskCompletionNotifier);
+    let creation_policy = config
+        .max_open_tasks
+        .map(OpenTaskLimitPolicy::new)
+        .unwrap_or_default();
+    let owner = UserId::new(config.user).map_err(|error| error.to_string())?;
+    let service = TaskApplicationService::new(
+        repository.clone(),
+        event_publisher,
+        creation_policy,
+        owner,
+    );
     let mut app = CliApp::new(service, repository, config.per_page);
 
     // 3. 入出力ループ
@@ -104,6 +116,8 @@ fn run() -> Result<(), String> {
 ```rust
 struct Config {
     per_page: u64,
+    user: String,
+    max_open_tasks: Option<usize>,
 }
 
 impl Config {
@@ -117,10 +131,25 @@ impl Config {
             Err(_) => DEFAULT_PER_PAGE,
         };
 
-        Ok(Self { per_page })
+        // TASK_APP_USER(既定値 "me")と TASK_APP_MAX_OPEN_TASKS も同じ要領で読む
+        // ...
+
+        Ok(Self {
+            per_page,
+            user,
+            max_open_tasks,
+        })
     }
 }
 ```
+
+設定できる環境変数は次の3つです。
+
+| 環境変数 | 既定値 | 意味 |
+|---|---|---|
+| `TASK_APP_PER_PAGE` | 20 | 一覧の1ページあたりの件数 |
+| `TASK_APP_USER` | `me` | タスクの持ち主となる利用者のID |
+| `TASK_APP_MAX_OPEN_TASKS` | 5 | 同時に持てる未完了タスクの上限(`OpenTaskLimitPolicy`) |
 
 ここで大切なのは次の2点です。
 
@@ -138,11 +167,27 @@ $ echo $?
 
 依存の組み立ては、第5章-3のコラムで扱った **コンポジションルート** そのものです。具体的な実装を選ぶのはここだけで、`CliApp` も `TaskApplicationService` もトレイト境界にしか依存していません。
 
+`TaskApplicationService` には、次の4つを渡しています。
+
+| 引数 | 渡しているもの | 役割 |
+|---|---|---|
+| Repository | `InMemoryTaskRepository` | タスクの保存と取得 |
+| イベントの発行先 | `TaskCompletedNotificationHandler<LoggingTaskCompletionNotifier>` | 完了イベントを受けて通知のログを出す |
+| 作成上限ポリシー | `OpenTaskLimitPolicy` | 未完了タスク数の上限を判定する Domain Service |
+| 利用者 | `UserId` | 上限を判定する対象 |
+
+通知をメール送信に変えたい、テストではイベントを記録したい、といった差し替えも、この組み立て部分だけを変えれば済みます。
+
 今回の構成で1つ注目してほしいのは、`repository.clone()` です。
 
 ```rust
 let repository = InMemoryTaskRepository::new();
-let service = TaskApplicationService::new(repository.clone()); // 書き込み側
+let service = TaskApplicationService::new(
+    repository.clone(), // 書き込み側
+    event_publisher,
+    creation_policy,
+    owner,
+);
 let mut app = CliApp::new(service, repository, config.per_page); // 読み取り側
 ```
 
@@ -208,12 +253,13 @@ pub fn parse_command(line: &str) -> Result<Command, CommandParseError>
 ### ユースケースを呼び出す
 
 ```rust
-pub struct CliApp<R, Q>
+pub struct CliApp<R, P, Q>
 where
     R: TaskRepository,
+    P: DomainEventPublisher,
     Q: TaskSummaryReader,
 {
-    service: TaskApplicationService<R>,
+    service: TaskApplicationService<R, P>,
     reader: Q,
     per_page: u64,
 }
@@ -247,7 +293,7 @@ pub fn error_message(error: &TaskApplicationError) -> String {
 #[test]
 fn cli_app_shares_state_between_service_and_reader() {
     let repository = InMemoryTaskRepository::new();
-    let service = TaskApplicationService::new(repository.clone());
+    let service = new_service(repository.clone());
     let mut app = CliApp::new(service, repository, 20);
 
     app.execute(Command::Create {
@@ -261,7 +307,7 @@ fn cli_app_shares_state_between_service_and_reader() {
 }
 ```
 
-このテストは `main.rs` と同じ組み立てを再現しているので、「組み立て方を間違えて一覧に何も出ない」といった配線ミスも検出できます。`main.rs` に残るのは、標準入出力と終了コードの扱いという、ほとんど分岐のないコードだけです。
+`new_service` は、イベントの記録用の発行先と作成上限ポリシーを渡して `TaskApplicationService` を組み立てるテスト用のヘルパーです(第5章-10)。このテストは `main.rs` と同じ組み立てを再現しているので、「組み立て方を間違えて一覧に何も出ない」といった配線ミスも検出できます。`main.rs` に残るのは、標準入出力と終了コードの扱いという、ほとんど分岐のないコードだけです。
 
 なお、パイプで入力を流し込めば、CLI全体の動作も手軽に確認できます。
 
@@ -278,7 +324,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::{Router, routing::post};
 
-type AppService = TaskApplicationService<PostgresTaskRepository>;
+type AppService = TaskApplicationService<PostgresTaskRepository, AppEventPublisher>;
 
 #[derive(Clone)]
 struct AppState {
@@ -293,7 +339,12 @@ async fn main() -> anyhow::Result<()> {
     // 2. 依存の組み立て(コンポジションルート)
     let pool = PgPool::connect(&config.database_url).await?;
     let repository = PostgresTaskRepository::new(pool);
-    let service = TaskApplicationService::new(repository);
+    let service = TaskApplicationService::new(
+        repository,
+        AppEventPublisher::new(/* 通知先など */),
+        OpenTaskLimitPolicy::new(config.max_open_tasks),
+        UserId::new(config.user)?,
+    );
     let state = AppState {
         service: Arc::new(Mutex::new(service)),
     };

@@ -10,6 +10,8 @@ Repositoryは、Aggregateの保存と取得を抽象化するための境界で�
 pub trait TaskRepository {
     fn save(&mut self, task: Task);
     fn find_by_id(&self, task_id: &TaskId) -> Option<Task>;
+    /// Open 状態のタスク数。作成上限ポリシーの判定材料として使う。
+    fn count_open_tasks(&self) -> usize;
 }
 ```
 
@@ -21,7 +23,9 @@ pub trait TaskRepository {
 
 Repositoryが便利箱になると、「何が業務上必要な操作なのか」よりも「取れるデータをどう組み合わせるか」がApplication Service側へ漏れやすくなります。すると、本来はドメインの意味を持つ条件まで呼び出し側が毎回組み立てることになり、ルールの重複や条件漏れが起きやすくなります。最小限の操作から始めるのは、単に小さく保つためではなく、責務の境界を崩さないためです。
 
-このタスク管理アプリでは、作成・更新・取得に必要な `save` と `find_by_id` だけに絞っています。
+このタスク管理アプリでは、作成・更新・取得に必要な `save` と `find_by_id`、そして作成上限の判定に必要な `count_open_tasks` だけに絞っています。
+
+`count_open_tasks` は一覧取得のような汎用的な検索ではなく、「未完了タスクは5件まで」という業務ルール(第4章-5の `OpenTaskLimitPolicy`)を判定するために、ユースケースが必要としている操作です。件数を数えるのは Repository、その件数で作成してよいかを判断するのは Domain Service、という分担になっています。Repository にメソッドを足すときは、このように「どのユースケースの、どの判断のために必要か」を説明できるかどうかを基準にします。
 
 ## Rustでトレイトにする意味
 

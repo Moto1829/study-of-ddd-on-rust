@@ -12,15 +12,19 @@ use std::env;
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
-use study_of_ddd_on_rust::application::TaskApplicationService;
-use study_of_ddd_on_rust::infrastructure::InMemoryTaskRepository;
+use study_of_ddd_on_rust::application::{TaskApplicationService, TaskCompletedNotificationHandler};
+use study_of_ddd_on_rust::domain::{OpenTaskLimitPolicy, UserId};
+use study_of_ddd_on_rust::infrastructure::{InMemoryTaskRepository, LoggingTaskCompletionNotifier};
 use study_of_ddd_on_rust::presentation::{CliApp, Command, HELP_TEXT, error_message, parse_command};
 
 const DEFAULT_PER_PAGE: u64 = 20;
+const DEFAULT_USER: &str = "me";
 
 /// 起動時に一度だけ読み込む設定値。
 struct Config {
     per_page: u64,
+    user: String,
+    max_open_tasks: Option<usize>,
 }
 
 impl Config {
@@ -34,7 +38,26 @@ impl Config {
             Err(_) => DEFAULT_PER_PAGE,
         };
 
-        Ok(Self { per_page })
+        let user = env::var("TASK_APP_USER").unwrap_or_else(|_| DEFAULT_USER.to_owned());
+
+        let max_open_tasks = match env::var("TASK_APP_MAX_OPEN_TASKS") {
+            Ok(value) => Some(
+                value
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| {
+                        format!("TASK_APP_MAX_OPEN_TASKS は1以上の整数で指定してください: {value}")
+                    })?,
+            ),
+            Err(_) => None,
+        };
+
+        Ok(Self {
+            per_page,
+            user,
+            max_open_tasks,
+        })
     }
 }
 
@@ -56,7 +79,19 @@ fn run() -> Result<(), String> {
     //    InMemoryTaskRepository は内部で状態を Arc 共有しているため、
     //    clone したものを書き込み用と読み取り用に渡すと同じデータを参照できる。
     let repository = InMemoryTaskRepository::new();
-    let service = TaskApplicationService::new(repository.clone());
+    // 完了イベントを受けて通知する購読者を、イベントの発行先として渡す
+    let event_publisher = TaskCompletedNotificationHandler::new(LoggingTaskCompletionNotifier);
+    let creation_policy = config
+        .max_open_tasks
+        .map(OpenTaskLimitPolicy::new)
+        .unwrap_or_default();
+    let owner = UserId::new(config.user).map_err(|error| error.to_string())?;
+    let service = TaskApplicationService::new(
+        repository.clone(),
+        event_publisher,
+        creation_policy,
+        owner,
+    );
     let mut app = CliApp::new(service, repository, config.per_page);
 
     // 3. 入出力ループ
