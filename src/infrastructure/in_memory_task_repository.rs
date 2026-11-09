@@ -21,12 +21,19 @@ impl InMemoryTaskRepository {
         Self::default()
     }
 
-    /// トランザクション開始時点の状態を複製する(InMemoryTransactionRunner 用)。
+    /// トランザクション開始時点の状態を複製する(InMemoryTransactionRunner、InMemoryUnitOfWork 用)。
     pub(super) fn snapshot(&self) -> HashMap<String, TaskRow> {
         self.rows.read().unwrap().clone()
     }
 
-    /// 複製しておいた状態へ戻す(InMemoryTransactionRunner 用)。
+    /// 渡した状態を持つ、独立した保存領域の Repository を作る(InMemoryUnitOfWork 用)。
+    pub(super) fn from_snapshot(rows: HashMap<String, TaskRow>) -> Self {
+        Self {
+            rows: Arc::new(RwLock::new(rows)),
+        }
+    }
+
+    /// 複製しておいた状態へ戻す(InMemoryTransactionRunner、InMemoryUnitOfWork 用)。
     pub(super) fn restore(&self, snapshot: HashMap<String, TaskRow>) {
         *self.rows.write().unwrap() = snapshot;
     }

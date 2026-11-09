@@ -9,16 +9,19 @@ mod tests {
 
     use crate::application::{
         BulkTaskCompletionService, DomainEventPublisher, FindTasksQuery, NotificationError,
+        ProjectApplicationError, ProjectApplicationService, UnitOfWork, UnitOfWorkFactory,
         TaskApplicationError, TaskApplicationService, TaskCompletedNotificationHandler,
         TaskCompletionNotifier, TaskStatusDto, TaskSummaryReader, TransactionRunner,
     };
     use crate::domain::{
-        OpenTaskLimitPolicy, Task, TaskCreationPolicyError, TaskError, TaskId, TaskRepository,
+        OpenTaskLimitPolicy, Project, ProjectError, ProjectId, ProjectName, ProjectRepository,
+        ProjectStatus, Task, TaskCreationPolicyError, TaskError, TaskId, TaskRepository,
         TaskStatus,
         TaskEvent, TaskTitle, UserId,
     };
     use crate::infrastructure::{
-        InMemoryDomainEventPublisher, InMemoryTaskRepository, InMemoryTransactionRunner,
+        InMemoryDomainEventPublisher, InMemoryProjectRepository, InMemoryTaskRepository,
+        InMemoryTransactionRunner, InMemoryUnitOfWorkFactory,
         LoggingTaskCompletionNotifier, TaskRow,
     };
     use crate::presentation::{CliApp, Command, CommandParseError, error_message, parse_command};
@@ -559,6 +562,142 @@ mod tests {
             vec![TaskEvent::TaskCompleted {
                 task_id: TaskId::new("task-1").unwrap()
             }]
+        );
+    }
+
+    type TestProjectService =
+        ProjectApplicationService<InMemoryUnitOfWorkFactory, InMemoryDomainEventPublisher>;
+
+    /// タスク用とプロジェクト用の Repository、両方を対象にする Unit of Work を組み立てる。
+    fn new_project_fixture() -> (
+        TestService,
+        TestProjectService,
+        InMemoryTaskRepository,
+        InMemoryProjectRepository,
+        InMemoryDomainEventPublisher,
+    ) {
+        let tasks = InMemoryTaskRepository::new();
+        let projects = InMemoryProjectRepository::new();
+        let publisher = InMemoryDomainEventPublisher::new();
+        let task_service = new_service(tasks.clone());
+        let project_service = ProjectApplicationService::new(
+            InMemoryUnitOfWorkFactory::new(&tasks, &projects),
+            publisher.clone(),
+        );
+        (task_service, project_service, tasks, projects, publisher)
+    }
+
+    #[test]
+    fn closing_project_archives_all_its_tasks_in_one_unit_of_work() {
+        let (mut task_service, project_service, _, _, publisher) = new_project_fixture();
+        task_service.create_task("task-1", "Write draft").unwrap();
+        task_service.create_task("task-2", "Review draft").unwrap();
+        task_service.complete_task("task-2").unwrap();
+        project_service.create_project("book", "Write a book").unwrap();
+        project_service.add_task_to_project("book", "task-1").unwrap();
+        project_service.add_task_to_project("book", "task-2").unwrap();
+
+        let output = project_service.close_project("book").unwrap();
+
+        assert!(output.closed);
+        assert_eq!(task_service.get_task("task-1").unwrap().status, TaskStatusDto::Archived);
+        assert_eq!(task_service.get_task("task-2").unwrap().status, TaskStatusDto::Archived);
+        assert_eq!(
+            publisher.events(),
+            vec![
+                TaskEvent::TaskArchived {
+                    task_id: TaskId::new("task-1").unwrap()
+                },
+                TaskEvent::TaskArchived {
+                    task_id: TaskId::new("task-2").unwrap()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn closing_project_rolls_back_project_and_tasks_when_a_task_is_missing() {
+        let (mut task_service, project_service, _, mut projects, publisher) =
+            new_project_fixture();
+        task_service.create_task("task-1", "Write draft").unwrap();
+        // 存在しないタスクを参照している(データ不整合の)プロジェクトを直接用意する
+        projects.save(Project::restore(
+            ProjectId::new("book").unwrap(),
+            ProjectName::new("Write a book").unwrap(),
+            ProjectStatus::Active,
+            vec![TaskId::new("task-1").unwrap(), TaskId::new("missing").unwrap()],
+        ));
+
+        let result = project_service.close_project("book");
+
+        assert_eq!(
+            result,
+            Err(ProjectApplicationError::TaskNotFound {
+                task_id: "missing".to_owned(),
+            })
+        );
+        // プロジェクトのクローズも、task-1 のアーカイブも確定していない
+        let project = projects.find_by_id(&ProjectId::new("book").unwrap()).unwrap();
+        assert_eq!(project.status(), ProjectStatus::Active);
+        assert_eq!(task_service.get_task("task-1").unwrap().status, TaskStatusDto::Open);
+        assert!(publisher.events().is_empty());
+    }
+
+    #[test]
+    fn unit_of_work_changes_are_invisible_until_commit_and_discarded_on_drop() {
+        let tasks = InMemoryTaskRepository::new();
+        let projects = InMemoryProjectRepository::new();
+        let factory = InMemoryUnitOfWorkFactory::new(&tasks, &projects);
+        let task_id = TaskId::new("task-1").unwrap();
+
+        {
+            let mut uow = factory.begin();
+            uow.tasks().save(Task::new(
+                task_id.clone(),
+                TaskTitle::new("Write draft").unwrap(),
+            ));
+            // commit 前は共有の保存領域から見えない
+            assert!(tasks.find_by_id(&task_id).is_none());
+            // commit せずに drop する
+        }
+        assert!(tasks.find_by_id(&task_id).is_none());
+
+        let mut uow = factory.begin();
+        uow.tasks().save(Task::new(
+            task_id.clone(),
+            TaskTitle::new("Write draft").unwrap(),
+        ));
+        uow.commit().unwrap();
+        assert!(tasks.find_by_id(&task_id).is_some());
+    }
+
+    #[test]
+    fn adding_unknown_task_to_project_is_rejected() {
+        let (_, project_service, _, _, _) = new_project_fixture();
+        project_service.create_project("book", "Write a book").unwrap();
+
+        let result = project_service.add_task_to_project("book", "missing");
+
+        assert_eq!(
+            result,
+            Err(ProjectApplicationError::TaskNotFound {
+                task_id: "missing".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn closed_project_does_not_accept_new_tasks() {
+        let (mut task_service, project_service, _, _, _) = new_project_fixture();
+        task_service.create_task("task-1", "Write draft").unwrap();
+        project_service.create_project("book", "Write a book").unwrap();
+        project_service.close_project("book").unwrap();
+
+        let result = project_service.add_task_to_project("book", "task-1");
+
+        assert_eq!(
+            result,
+            Err(ProjectApplicationError::Project(ProjectError::ProjectAlreadyClosed))
         );
     }
 }

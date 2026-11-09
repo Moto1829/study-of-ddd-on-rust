@@ -15,6 +15,7 @@
 - [第4章-6 Factoryで生成ルールを閉じ込める](./04-tactical/06-factory.md)
 - [第4章-7 Specificationで条件を表現する](./04-tactical/07-specification.md)
 - [第4章-8 typestateで状態遷移を型にする](./04-tactical/08-typestate.md)
+- [第4章-9 Domain Eventを設計する](./04-tactical/09-domain-event.md)
 - [第5章-1 Application Serviceでユースケースを表現する](./05-application/01-application-service.md)
 - [第5章-2 Repositoryをトレイトで定義する](./05-application/02-repository.md)
 - [第5章-3 Infrastructure層の実装方針](./05-application/03-infrastructure.md)

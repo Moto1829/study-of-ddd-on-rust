@@ -37,7 +37,8 @@ mdbook build
 src/
 ├── domain/           # ドメイン層（外部依存なし）
 │   ├── task.rs           # Entity: Task, Value Object: TaskId/TaskTitle/TaskStatus
-│   ├── repository.rs     # TaskRepository トレイト定義
+│   ├── project.rs        # Aggregate: Project (所属タスクを TaskId で参照)
+│   ├── repository.rs     # TaskRepository / ProjectRepository トレイト定義
 │   ├── task_creation_policy.rs  # Domain Service: OpenTaskLimitPolicy
 │   └── task_event.rs     # Domain Event: TaskEvent
 ├── application/      # アプリケーション層
@@ -47,10 +48,14 @@ src/
 │   ├── task_query_service.rs        # 読み取りモデル (TaskSummaryReader トレイト)
 │   ├── task_completion_notifier.rs  # 外部通知トレイト
 │   ├── domain_event_publisher.rs    # イベント発行トレイト
-│   └── transaction_runner.rs        # トランザクション境界トレイト
+│   ├── project_application_service.rs  # プロジェクトのユースケース (Unit of Work で Project と Task を一括更新)
+│   ├── transaction_runner.rs        # トランザクション境界トレイト
+│   └── unit_of_work.rs              # UnitOfWork / UnitOfWorkFactory トレイト
 ├── infrastructure/   # インフラ層
 │   ├── in_memory_task_repository.rs  # InMemoryTaskRepository (TaskRepository実装、内部は TaskRow で保持)
 │   ├── in_memory_transaction_runner.rs  # InMemoryTransactionRunner (スナップショットでロールバック)
+│   ├── in_memory_project_repository.rs  # InMemoryProjectRepository
+│   ├── in_memory_unit_of_work.rs        # InMemoryUnitOfWork (作業用コピーを commit で反映)
 │   ├── persistence/task_row.rs       # TaskRow (DBレコード相当の永続化モデル)
 │   └── external/
 │       ├── logging_task_completion_notifier.rs  # ログ出力通知実装

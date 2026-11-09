@@ -80,6 +80,8 @@ pub fn close_project(&mut self, project_id: ProjectId) -> Result<(), ProjectAppl
 - 誰かがタスクを1件編集しているだけで、プロジェクトのクローズが失敗する
 - Aggregate が整合性の境界であるという設計の意味が薄れる
 
+ただし、これは絶対の禁止ではありません。業務上どうしても即時の整合性が必要で、同じDBにあり、競合も少ないなら、Unit of Work で複数の Aggregate を1つのトランザクションにまとめるのは現実的な選択です。サンプルコードの `ProjectApplicationService::close_project` は、あえてこの形で実装しています(第5章-5の `複数のRepositoryをまとめる: Unit of Work`)。大切なのは、原則に対する例外であると意識して選ぶことです。
+
 ## 結果整合性
 
 そこで使うのが**結果整合性(Eventual Consistency)** です。すべてを即座に整合させるのではなく、「最終的には整合した状態になる」ことを保証する考え方です。

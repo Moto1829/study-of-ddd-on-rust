@@ -37,29 +37,43 @@ pub trait TransactionRunner<E> {
 サンプルコードでは、`TransactionRunner` を使うユースケースとして `BulkTaskCompletionService`(`src/application/bulk_task_completion_service.rs`)を用意しています。指定した複数のタスクをまとめて完了し、1件でも失敗したら全件を取り消す、という方針のユースケースです。
 
 ```rust
-pub struct BulkTaskCompletionService<R, T>
+pub struct BulkTaskCompletionService<R, T, P>
 where
     R: TaskRepository,
     T: TransactionRunner<TaskApplicationError>,
+    P: DomainEventPublisher,
 {
     repository: R,
     transaction_runner: T,
+    event_publisher: P,
 }
 
-impl<R, T> BulkTaskCompletionService<R, T>
+impl<R, T, P> BulkTaskCompletionService<R, T, P>
 where
     R: TaskRepository,
     T: TransactionRunner<TaskApplicationError>,
+    P: DomainEventPublisher,
 {
+    pub fn new(repository: R, transaction_runner: T, event_publisher: P) -> Self {
+        Self {
+            repository,
+            transaction_runner,
+            event_publisher,
+        }
+    }
+
     pub fn complete_tasks<I, S>(&mut self, task_ids: I) -> Result<Vec<TaskOutput>, TaskApplicationError>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
+        // クロージャは repository だけを可変借用し、transaction_runner は不変借用する。
+        // 別々のフィールドなので、同時に借用しても衝突しない。
         let repository = &mut self.repository;
 
-        self.transaction_runner.run(|| {
+        let (outputs, events) = self.transaction_runner.run(|| {
             let mut outputs = Vec::new();
+            let mut events = Vec::new();
 
             for task_id in task_ids {
                 let task_id = TaskId::new(task_id)?;
@@ -69,13 +83,24 @@ where
                     }
                 })?;
 
+                // ここで失敗すると、それまでに保存した分も TransactionRunner が取り消す
                 task.complete()?;
                 outputs.push(TaskOutput::from(&task));
+                events.push(TaskEvent::TaskCompleted {
+                    task_id: task.id().clone(),
+                });
                 repository.save(task);
             }
 
-            Ok(outputs)
-        })
+            Ok((outputs, events))
+        })?;
+
+        // トランザクションが確定してから、起きた事実を発行する
+        for event in &events {
+            self.event_publisher.publish(event)?;
+        }
+
+        Ok(outputs)
     }
 }
 ```
@@ -85,6 +110,11 @@ where
 - **境界を決めているのはApplication Service**: `run` に渡すクロージャの範囲が、そのまま1つのトランザクションになる。「全件をまとめて包む」という判断はユースケースの設計そのもの
 - **ドメイン層はトランザクションを知らない**: `Task::complete` は、自分がトランザクションの中で呼ばれているかどうかを気にしない
 - **失敗は `Result` で伝える**: クロージャの中で `?` によって `Err` が返ると、`TransactionRunner` はそれまでの変更を取り消す
+- **イベントは確定後に発行する**: `run(...)?` の `?` で、取り消された場合はそのまま呼び出し元へ `Err` を返す。`run` が `Ok` を返したときだけ `TaskCompleted` を発行するので、取り消された完了について通知が飛ぶことはない
+
+`?` が2か所にあることに注意してください。ループの中の `?` はクロージャから抜けてロールバックさせるためのもので、`run(...)?` の `?` はロールバックされた `Err` を `complete_tasks` の呼び出し元へ返すためのものです。
+
+なお、この方針では、指定したタスクが1件でも完了できなければ(存在しない、すでに完了済み、アーカイブ済み)全件が取り消されます。同じIDを2回指定した場合も、2回目が `TaskAlreadyCompleted` になるため全体が失敗します。完了済みのタスクをとばす冪等な作りにするかどうかは、業務上「完了済みが混ざっていたら誤操作として知らせるべきか」で決める判断です。
 
 なお、クロージャが `self.repository` を可変借用している間に `self.transaction_runner` を不変借用していますが、別々のフィールドなのでRustの借用規則には違反しません。
 
@@ -137,18 +167,184 @@ let mut service = BulkTaskCompletionService::new(repository.clone(), runner, pub
 
 たとえば3件のタスクをまとめて完了する処理で、2件目だけが「すでに完了済み」で失敗したとします。このとき、1件目だけ完了を確定してよいのか、それとも3件とも取り消すべきかは、永続化技術の都合ではなくユースケースの設計判断です。こうした「どの変更を1まとまりとして扱うか」を意識すると、トランザクション境界や Unit of Work の必要性が見えやすくなります。
 
-## 関連する考え方: Unit of Work
+## 複数のRepositoryをまとめる: Unit of Work
 
-トランザクション境界を考えるとき、関連する考え方として Unit of Work があります。これは、1つのユースケースの中で発生した変更を追跡し、最後にまとめて確定するための考え方です。たとえば複数のEntityを読み出して変更し、それらを最後にまとめて永続化するような実装では、この概念が前面に出てきます。
+`TransactionRunner` は「どこからどこまでを1つのトランザクションで包むか」という境界だけを表します。`BulkTaskCompletionService` のように更新する Repository が1つなら、これで十分です。
 
-`TransactionRunner` が「どこからどこまでを1つのトランザクションで包むか」という境界を表すのに対して、Unit of Work は「その中でどの変更をまとめて確定するか」という見方に近いものです。実装によってはORMや永続化ライブラリが暗黙に担うこともあります。
+しかし、1つのユースケースで**複数の Repository(= 複数の Aggregate)を更新し、それらをまとめて確定したい**場合は、それぞれの Repository が同じトランザクションに属している必要があります。これを表すのが Unit of Work です。1つのユースケースの中で発生した変更を追跡し、最後にまとめて確定するための考え方です。
 
-ただし、この本の段階では Unit of Work を独立したパターンとして深掘りしなくても構いません。まず重要なのは、「どこまでを1回の処理として成功させるか」をApplication Serviceの責務として捉えることです。その意味で `TransactionRunner` を理解できれば、学習の第一段階としては十分です。
+### いつ使うべきか
+
+DDDの原則は「1つのトランザクションで更新するのは1つの Aggregate」です。複数の Aggregate の整合性を保ちたいときは、次の順で検討します(詳しくは第7章-12)。
+
+1. 数秒のずれが許されるなら、イベントでつなぐ結果整合性にする(第7章-12、第7章-14)
+2. 一瞬もずれてはいけないなら、本当に別の Aggregate であるべきかを見直す
+3. それでも別の Aggregate であるべきで、同じDBにあるなら、**Unit of Work で1つのトランザクションにする**
+
+つまり Unit of Work で複数の Aggregate を更新するのは、原則に対する「意識した例外」です。
+
+### サンプル: プロジェクトのクローズ
+
+サンプルコードには、タスクをまとめる `Project` Aggregate(`src/domain/project.rs`)を追加しています。`Project` は所属するタスクを `TaskId` で参照し、`Task` そのものは持ちません。
+
+業務ルールとして、「プロジェクトをクローズしたら、所属するタスクをすべてアーカイブする。クローズ済みのプロジェクトに、アーカイブされていないタスクが一瞬でも残ってはいけない」を前提にします。このルールを守るには、`Project` と複数の `Task` を1つのトランザクションで更新する必要があります。
+
+まず、Unit of Work をアプリケーション層のトレイトとして定義します(`src/application/unit_of_work.rs`)。
+
+```rust
+pub trait UnitOfWork {
+    type Tasks: TaskRepository;
+    type Projects: ProjectRepository;
+
+    fn tasks(&mut self) -> &mut Self::Tasks;
+    fn projects(&mut self) -> &mut Self::Projects;
+
+    /// 変更をまとめて確定する。`self` を消費するので、確定後に使い続けることはできない。
+    fn commit(self) -> Result<(), UnitOfWorkError>;
+}
+
+/// ユースケースごとに新しい Unit of Work(= トランザクション)を開始する。
+pub trait UnitOfWorkFactory {
+    type UnitOfWork: UnitOfWork;
+
+    fn begin(&self) -> Self::UnitOfWork;
+}
+```
+
+`tasks()` と `projects()` が返す Repository は、どちらも同じトランザクションに属します。`commit` は `self` を消費するので、確定したあとに Unit of Work を使い続けるコードはコンパイルエラーになります。また、`commit` せずに drop すると変更は破棄されます。`?` で早期リターンすれば、自動的にロールバックされるということです。
+
+Application Service(`src/application/project_application_service.rs`)は、Repository を直接持たず、ユースケースごとに `UnitOfWorkFactory::begin` で Unit of Work を開始します。
+
+```rust
+pub fn close_project(
+    &self,
+    project_id: impl Into<String>,
+) -> Result<ProjectOutput, ProjectApplicationError> {
+    let project_id = ProjectId::new(project_id)?;
+
+    let mut uow = self.unit_of_work_factory.begin();
+
+    let mut project = find_project(&mut uow, &project_id)?;
+    project.close()?;
+
+    let mut events = Vec::new();
+    for task_id in project.task_ids() {
+        let mut task = uow.tasks().find_by_id(task_id).ok_or_else(|| {
+            // ここで抜けると uow は commit されずに drop され、
+            // それまでにアーカイブしたタスクも含めてすべて破棄される
+            ProjectApplicationError::TaskNotFound {
+                task_id: task_id.value().to_owned(),
+            }
+        })?;
+
+        // すでにアーカイブ済みのタスクは、目的の状態なので何もしない
+        if task.status() == TaskStatus::Archived {
+            continue;
+        }
+
+        task.archive()?;
+        events.push(TaskEvent::TaskArchived {
+            task_id: task.id().clone(),
+        });
+        uow.tasks().save(task);
+    }
+
+    let output = ProjectOutput::from(&project);
+    uow.projects().save(project);
+
+    // Project と Task の変更を、ここでまとめて確定する
+    uow.commit()?;
+
+    // 確定してから、起きた事実を発行する
+    for event in &events {
+        self.event_publisher.publish(event)?;
+    }
+
+    Ok(output)
+}
+```
+
+ポイントは次の通りです。
+
+- **ドメインはトランザクションを知らない**: `Project::close` は自分の状態だけを変え、タスクのアーカイブは扱いません。2つの Aggregate を同じトランザクションで更新すると決めているのは Application Service です
+- **確定は1か所**: `uow.commit()` を呼ぶまで、`Project` の変更も `Task` の変更も確定しません。途中の `?` で抜ければ、どちらも破棄されます
+- **イベントは確定後に発行する**: `BulkTaskCompletionService` と同じく、`commit` が成功してから `TaskArchived` を発行します
+- **すでにアーカイブ済みのタスクは何もしない**: 目的の状態になっているものは変更しないので、同じプロジェクトを何度クローズしようとしても、タスク側で失敗することはありません(プロジェクト自体の二重クローズは `ProjectAlreadyClosed` になります)
+
+### インメモリでの実装
+
+インフラ層の `InMemoryUnitOfWork`(`src/infrastructure/in_memory_unit_of_work.rs`)は、開始時に共有の保存領域を複製した「作業用の Repository」を作ります。ユースケースはこの作業用の Repository だけを読み書きし、`commit` で共有の保存領域へ書き戻します。
+
+```rust
+impl UnitOfWorkFactory for InMemoryUnitOfWorkFactory {
+    type UnitOfWork = InMemoryUnitOfWork;
+
+    fn begin(&self) -> Self::UnitOfWork {
+        InMemoryUnitOfWork {
+            shared_tasks: self.tasks.clone(),
+            shared_projects: self.projects.clone(),
+            tasks: InMemoryTaskRepository::from_snapshot(self.tasks.snapshot()),
+            projects: InMemoryProjectRepository::from_snapshot(self.projects.snapshot()),
+        }
+    }
+}
+
+impl UnitOfWork for InMemoryUnitOfWork {
+    // ...
+    fn commit(self) -> Result<(), UnitOfWorkError> {
+        self.shared_tasks.restore(self.tasks.snapshot());
+        self.shared_projects.restore(self.projects.snapshot());
+        Ok(())
+    }
+}
+```
+
+これで、DBのトランザクションの「確定するまで他から見えない」「確定しなければ残らない」をメモリ上で再現しています。`InMemoryTransactionRunner` が「先に変更して、失敗したら戻す」方式だったのに対して、こちらは「別の場所で変更して、成功したら反映する」方式です。
+
+ただし学習用の簡易実装なので、2つの Unit of Work が同時に同じデータを変更しても競合は検出せず、後から `commit` した方が勝ちます。本番では、第7章-13の楽観ロックなどと組み合わせます。
+
+組み立ては次のようになります。Factory に、タスク用とプロジェクト用の両方の Repository を渡します。
+
+```rust
+let tasks = InMemoryTaskRepository::new();
+let projects = InMemoryProjectRepository::new();
+let project_service = ProjectApplicationService::new(
+    InMemoryUnitOfWorkFactory::new(&tasks, &projects),
+    publisher,
+);
+```
+
+テストでは、次の3点を確かめています。
+
+- `closing_project_archives_all_its_tasks_in_one_unit_of_work`: クローズでプロジェクトと全タスクが一緒に更新される
+- `closing_project_rolls_back_project_and_tasks_when_a_task_is_missing`: 途中のタスクが見つからないと、プロジェクトのクローズも、それまでのアーカイブも確定しない
+- `unit_of_work_changes_are_invisible_until_commit_and_discarded_on_drop`: `commit` 前の変更は外から見えず、drop すれば破棄される
+
+### DB実装に置き換えるなら
+
+`sqlx` を使う場合は、`begin` でトランザクションを開始し、各 Repository がその接続を使ってクエリを発行する形になります。
+
+```rust
+pub struct PgUnitOfWork {
+    tx: sqlx::Transaction<'static, sqlx::Postgres>,
+}
+
+impl PgUnitOfWork {
+    pub async fn commit(self) -> Result<(), UnitOfWorkError> {
+        self.tx.commit().await.map_err(|error| UnitOfWorkError::CommitFailed {
+            reason: error.to_string(),
+        })
+    }
+}
+```
+
+`sqlx::Transaction` は、`commit` せずに drop されると自動的にロールバックします。サンプルの `InMemoryUnitOfWork` と同じ性質です。Application Service のコードは、Repository のメソッドが `async` になる点(第5章-8)を除けば変わりません。
 
 ## よくある誤解
 
 - Repositoryがトランザクションを全部隠してくれると思いがち
 - ドメインモデルのメソッド内でトランザクションを開始したくなりがち
 - 1件更新でも毎回複雑なUnit of Workを導入したくなりがち
+- 複数の Aggregate を1つのトランザクションで更新できるなら、結果整合性は不要だと考えがち
 
-学習段階では、まず「トランザクション境界はユースケース単位で考える」という理解があれば十分です。
+学習段階では、まず「トランザクション境界はユースケース単位で考える」という理解があれば十分です。Unit of Work は、更新する Repository が複数になり、しかも即時の整合性が必要なときに初めて導入すれば足ります。
